@@ -1,0 +1,76 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- M3 后台计时（方案 6.5②/6.6）：前台服务 + 常驻通知 + 到点提醒 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- M3 阶段三：精确闹钟兜底。
+         USE_EXACT_ALARM 面向「核心功能就是计时器 / 闹钟」的应用，Android 13+ 系统
+         自动授予，不需要运行时引导页；本应用只装自有测试机，不涉及 Google Play 政策。 -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- M3 阶段四：保活引导页要用标准对话框申请「电池无限制」（比跳 MIUI 页面更通用） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <application
+        android:label="一颗番茄"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- M3：计时前台服务。specialUse = 方案 6.6②（Android 14+ 必须声明服务类型） -->
+        <service
+            android:name=".TimerForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Pomodoro timer keeps a live countdown notification so the user can pause, resume or skip without opening the app" />
+        </service>
+        <!-- M3 阶段三：到点提醒接收器。由 AlarmManager 的精确闹钟触发，
+             **不依赖 App 进程存活** —— 澎湃OS 息屏深度冻结时这是最后一道保险。
+             exported=false：只有本应用的 PendingIntent 能触发它。 -->
+        <receiver
+            android:name=".TimerAlarmReceiver"
+            android:exported="false" />
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- M3 阶段四：Android 11+ 包可见性限制，不声明就 resolve/start 不到
+             澎湃OS 的自启动管理与省电策略页面 -->
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.miui.powercenter" />
+    </queries>
+</manifest>
