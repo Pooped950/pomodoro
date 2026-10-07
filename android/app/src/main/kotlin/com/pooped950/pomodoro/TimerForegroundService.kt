@@ -1,4 +1,4 @@
-package com.xiaofen.pomodoro
+package com.pooped950.pomodoro
 
 import android.app.AlarmManager
 import android.app.Notification
@@ -58,14 +58,14 @@ class TimerForegroundService : Service() {
         const val NOTIF_TIMER_ID = 1
         const val NOTIF_ALARM_ID = 2
 
-        const val ACTION_START_OR_UPDATE = "com.xiaofen.pomodoro.START_OR_UPDATE"
-        const val ACTION_PAUSE = "com.xiaofen.pomodoro.PAUSE"
-        const val ACTION_RESUME = "com.xiaofen.pomodoro.RESUME"
-        const val ACTION_SKIP = "com.xiaofen.pomodoro.SKIP"
-        const val ACTION_STOP = "com.xiaofen.pomodoro.STOP"
+        const val ACTION_START_OR_UPDATE = "com.pooped950.pomodoro.START_OR_UPDATE"
+        const val ACTION_PAUSE = "com.pooped950.pomodoro.PAUSE"
+        const val ACTION_RESUME = "com.pooped950.pomodoro.RESUME"
+        const val ACTION_SKIP = "com.pooped950.pomodoro.SKIP"
+        const val ACTION_STOP = "com.pooped950.pomodoro.STOP"
 
         /** M3 阶段三：精确闹钟触发后，由 [TimerAlarmReceiver] 唤起本服务推进阶段 */
-        const val ACTION_EXPIRED = "com.xiaofen.pomodoro.EXPIRED"
+        const val ACTION_EXPIRED = "com.pooped950.pomodoro.EXPIRED"
 
         // 与 Dart 侧 TimerServiceProtocol 的 key 一一对应
         const val KEY_PHASE = "phase"

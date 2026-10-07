@@ -1,4 +1,4 @@
-package com.xiaofen.pomodoro
+package com.pooped950.pomodoro
 
 import android.Manifest
 import android.app.AlarmManager

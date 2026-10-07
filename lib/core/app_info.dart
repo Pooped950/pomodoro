@@ -6,7 +6,7 @@
 library;
 
 const String kAppName = '一颗番茄';
-const String kAppVersion = '2.0.0';
+const String kAppVersion = '2.0.1';
 // ⚠️ 2026-10-07 用户要求：不再出现作者署名 / 开源协议 / 数据存储相关的
 // 常量或文案 —— 产品形态以后可能变（闭源收费 / 数据上传）。
 // 现在这页只留名称和版本。

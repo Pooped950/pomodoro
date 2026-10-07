@@ -120,19 +120,28 @@ class _AppShellState extends ConsumerState<AppShell> {
   Future<void> _maybeShowUpdateDialog() async {
     final SettingsRepository settings =
         ref.read(settingsRepositoryProvider);
-    final String? seen =
-        await settings.readString(SettingsRepository.keyUpdateSeenVersion);
-    if (!shouldShowMajorUpdateDialog(seen, kAppVersion)) return;
-    // 手册从没弹过 = 全新安装：更新说明对他是噪音，直接记版本
+    // ⚠️ 顺序不能反：全新安装的判据是「手册还没弹过」，所以要抢在
+    // _maybeShowManual 把 manualSeen 写进设置之前读（见 _maybeShowStartupDialogs）
     final String? manualSeen =
         await settings.readString(SettingsRepository.keyManualSeenVersion);
-    if (manualSeen == null) {
-      await settings.writeString(
-          SettingsRepository.keyUpdateSeenVersion, kAppVersion);
+    final String? seen =
+        await settings.readString(SettingsRepository.keyUpdateSeenVersion);
+
+    if (!shouldShowMajorUpdateDialog(
+      isFreshInstall: manualSeen == null,
+      seenVersion: seen,
+      currentVersion: kAppVersion,
+    )) {
+      // 全新安装、或者本地是脏数据：把当前版本记下来，
+      // 免得下次被当成"这个键不存在"而误弹
+      if (seen != kAppVersion && (seen == null || majorVersionOf(seen) == null)) {
+        await settings.writeString(
+            SettingsRepository.keyUpdateSeenVersion, kAppVersion);
+      }
       return;
     }
     if (kDebugMode) {
-      debugPrint('[UPDATE] 大版本升级（见过 ${seen ?? '无'} → $kAppVersion）弹更新说明');
+      debugPrint('[UPDATE] 大版本升级（见过 ${seen ?? '键不存在'} → $kAppVersion）弹更新说明');
     }
     if (!mounted) return;
     await showUpdateDialog(context);

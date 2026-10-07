@@ -1,4 +1,4 @@
-package com.xiaofen.pomodoro
+package com.pooped950.pomodoro
 
 import android.app.NotificationManager
 import android.content.BroadcastReceiver
@@ -31,7 +31,7 @@ class TimerAlarmReceiver : BroadcastReceiver() {
 
     companion object {
         /** 与 AlarmManager 排程时用的 action 一致 */
-        const val ACTION_ALARM_FIRED = "com.xiaofen.pomodoro.ALARM_FIRED"
+        const val ACTION_ALARM_FIRED = "com.pooped950.pomodoro.ALARM_FIRED"
 
         /** 阶段名，用于决定提醒文案（专注完成 / 休息结束） */
         const val EXTRA_PHASE = "alarmPhase"

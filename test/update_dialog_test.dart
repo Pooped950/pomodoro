@@ -9,25 +9,54 @@ import 'package:pomodoro/presentation/pages/manual/update_dialog.dart';
 /// 小版本/补丁不该烦人。
 void main() {
   group('shouldShowMajorUpdateDialog', () {
+    bool call({
+      required bool fresh,
+      required String? seen,
+      String current = '2.0.0',
+    }) =>
+        shouldShowMajorUpdateDialog(
+          isFreshInstall: fresh,
+          seenVersion: seen,
+          currentVersion: current,
+        );
+
     test('★ major 更小才弹：1.9.0 → 2.0.0 弹，2.0.0 → 2.0.0 不弹', () {
-      expect(shouldShowMajorUpdateDialog('1.9.0', '2.0.0'), isTrue);
-      expect(shouldShowMajorUpdateDialog('2.0.0', '2.0.0'), isFalse);
-      expect(shouldShowMajorUpdateDialog('2.1.0', '2.0.0'), isFalse);
+      expect(call(fresh: false, seen: '1.9.0'), isTrue);
+      expect(call(fresh: false, seen: '2.0.0'), isFalse);
+      expect(call(fresh: false, seen: '2.1.0'), isFalse);
+    });
+
+    test('★ 键不存在的老用户也要弹（1.8.0 → 2.0.0 的真实升级路径）', () {
+      // 真机实测踩到过：早先把 null 当"全新安装"直接不弹，
+      // 结果所有 1.8.0 升上来的用户永远看不到更新说明（交接文档 §4.8）
+      expect(call(fresh: false, seen: null), isTrue);
+    });
+
+    test('全新安装不弹（手册会讲），不管本地记过什么', () {
+      expect(call(fresh: true, seen: null), isFalse);
+      expect(call(fresh: true, seen: '1.8.0'), isFalse);
     });
 
     test('小版本和补丁不弹（2.0.0 → 2.1.x）', () {
-      expect(shouldShowMajorUpdateDialog('2.0.0', '2.1.0'), isFalse);
-      expect(shouldShowMajorUpdateDialog('2.0.0', '2.0.5'), isFalse);
+      expect(call(fresh: false, seen: '2.0.0', current: '2.1.0'), isFalse);
+      expect(call(fresh: false, seen: '2.0.0', current: '2.0.5'), isFalse);
     });
 
-    test('null / 脏数据不弹（全新安装或认不出，宁可少弹）', () {
-      expect(shouldShowMajorUpdateDialog(null, '2.0.0'), isFalse);
-      expect(shouldShowMajorUpdateDialog('abc', '2.0.0'), isFalse);
-      expect(shouldShowMajorUpdateDialog('', '2.0.0'), isFalse);
+    test('脏数据不弹（宁可少弹，不要错弹）', () {
+      expect(call(fresh: false, seen: 'abc'), isFalse);
+      expect(call(fresh: false, seen: ''), isFalse);
     });
 
     test('跨多个大版本也弹（1.x 直接升 3.0.0）', () {
-      expect(shouldShowMajorUpdateDialog('1.8.0', '3.0.0'), isTrue);
+      expect(call(fresh: false, seen: '1.8.0', current: '3.0.0'), isTrue);
+    });
+
+    test('majorVersionOf：正常解析；脏数据/null 返回 null', () {
+      expect(majorVersionOf('2.0.1'), 2);
+      expect(majorVersionOf(' 3.4.5 '), 3);
+      expect(majorVersionOf('abc'), isNull);
+      expect(majorVersionOf(''), isNull);
+      expect(majorVersionOf(null), isNull);
     });
   });
 

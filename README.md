@@ -33,9 +33,9 @@ lib/
 ├── domain/          # 领域模型与纯函数（计时协议 / 任务 / 统计 / 设置 / OCR）
 ├── data/            # SQLite 仓储层（sessions / tasks / settings）+ 服务封装
 ├── presentation/    # 页面、组件、Riverpod 状态
-android/app/src/main/kotlin/com/xiaofen/pomodoro/
+android/app/src/main/kotlin/com/pooped950/pomodoro/
 └── *.kt             # 前台服务、精确闹钟接收器、保活通道（Kotlin 原生）
-test/                # 310 个单元测试（纯函数层全覆盖）
+test/                # 313 个单元测试（纯函数层全覆盖）
 ```
 
 设计要点：领域层不依赖 Flutter（可直接单测）；计时状态由原生前台服务自持，

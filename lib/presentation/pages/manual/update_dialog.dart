@@ -6,22 +6,37 @@ import '../../../core/theme/motion_tokens.dart';
 import '../../widgets/glass_surface.dart';
 import '../../widgets/motion_scope.dart';
 
-/// 当前版本相对 [seenVersion] 是否要弹「大版本更新」弹窗。
+/// 启动时该不该弹「大版本更新说明」。
 ///
 /// 规则（2026-10-07 用户要求：**大版本更新才弹**，小版本/补丁不烦人）：
-///   - 比较的是 **major 段**（`2.0.0` 的 `2`）：seen 的 major 更小 → 要弹
-///   - [seenVersion] 为 null 或认不出 → **不弹**（全新安装走手册，
-///     不该再叠一个更新弹窗；脏数据宁可少弹不要错弹）
+///   - [isFreshInstall]（手册从没弹过 = 全新安装）→ **不弹**：手册讲得更全，
+///     不该再叠一个弹窗
+///   - 否则比较 **major 段**（`2.0.0` 的 `2`）：见过的 major 更小 → 弹
+///   - [seenVersion] 为 `null` = **这台机器上还没有这个键**：本功能是 2.0.0 才加的，
+///     从 1.8.0 升上来的用户读出来就是 null —— 对老用户等于"没见过" → 弹
+///   - 认不出的脏数据（`abc`）→ 不弹：宁可少弹，不要错弹
+///
+/// ⚠️ 2026-10-07 真机实测踩到的坑（见交接文档 §4.8）：早先的版本把 `null` 一律当
+/// "全新安装"直接不弹，结果 **1.8.0 → 2.0.0 这条真实升级路径永远不会弹更新说明**。
+/// 「全新安装」的判据只能是「手册看没看过」，**不能**用"这个键存不存在"。
 ///
 /// 纯函数，宿主机可直接单测。
-bool shouldShowMajorUpdateDialog(String? seenVersion, String currentVersion) {
-  final int? seenMajor = _majorOf(seenVersion);
-  final int? currentMajor = _majorOf(currentVersion);
-  if (seenMajor == null || currentMajor == null) return false;
+bool shouldShowMajorUpdateDialog({
+  required bool isFreshInstall,
+  required String? seenVersion,
+  required String currentVersion,
+}) {
+  if (isFreshInstall) return false;
+  final int? currentMajor = majorVersionOf(currentVersion);
+  if (currentMajor == null) return false;
+  if (seenVersion == null) return true;
+  final int? seenMajor = majorVersionOf(seenVersion);
+  if (seenMajor == null) return false;
   return seenMajor < currentMajor;
 }
 
-int? _majorOf(String? version) {
+/// 取版本号的 major 段（`2.0.1` → `2`）；`null` 或认不出返回 `null`。
+int? majorVersionOf(String? version) {
   if (version == null) return null;
   final String major = version.trim().split('.').first;
   return int.tryParse(major);

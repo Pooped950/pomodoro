@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.xiaofen.pomodoro"
+    namespace = "com.pooped950.pomodoro"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -16,7 +16,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.xiaofen.pomodoro"
+        applicationId = "com.pooped950.pomodoro"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
