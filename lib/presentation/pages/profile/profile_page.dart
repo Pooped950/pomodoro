@@ -9,11 +9,13 @@ import '../../providers/stats_provider.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/app_page_route.dart';
 import '../../widgets/pressable.dart';
+import '../../widgets/update_row.dart';
 import '../manual/about_page.dart';
 import '../manual/manual_dialog.dart';
 import '../settings/import_timetable_page.dart';
 import '../settings/keepalive_page.dart';
 import '../settings/settings_detail_page.dart';
+import '../update/update_page.dart';
 
 /// 「我的」（一级页）
 ///
@@ -106,6 +108,15 @@ class ProfilePage extends ConsumerWidget {
                       onTap: () => pushAppPage(context, const AboutPage()),
                     ),
                   ],
+                ),
+              ),
+
+              // 最下面一行：检查更新（有新版时这里会出现小红点）
+              const SizedBox(height: AppSpacing.section),
+              AppCard(
+                padding: EdgeInsets.zero,
+                child: UpdateRow(
+                  onTap: () => pushAppPage(context, const UpdatePage()),
                 ),
               ),
             ],
