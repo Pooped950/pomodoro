@@ -1,19 +1,25 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/app_info.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/theme/motion_tokens.dart';
+import '../../../data/repositories/settings_repository.dart';
 import '../../providers/stats_provider.dart';
 import '../../providers/task_provider.dart';
 import '../../widgets/ambient_background.dart';
 import '../../widgets/floating_nav_bar.dart';
 import '../../widgets/motion_scope.dart';
 import '../home/home_page.dart';
+import '../manual/manual_content.dart';
+import '../manual/update_dialog.dart';
+import '../manual/manual_dialog.dart';
 import '../profile/profile_page.dart';
-import '../stats/stats_page.dart';
-import '../tasks/tasks_page.dart';
+import '../taskstats/task_stats_page.dart';
+import '../timetable/timetable_page.dart';
 
 /// 应用外壳：环境色背景 + 可滑动页面 + 悬浮导航条。
 ///
@@ -53,8 +59,12 @@ class AppShell extends ConsumerStatefulWidget {
 }
 
 class _AppShellState extends ConsumerState<AppShell> {
-  static const int _tasksIndex = 1;
-  static const int _statsIndex = 2;
+  /// 第二格：「任务 + 统计」合并成一页，页内两个小标签切换。
+  ///
+  /// 2026-10-06 由用户提出 —— 原来「任务」「统计」各占一格，
+  /// 现在合并，腾出的第三格给课表。
+  static const int _combinedIndex = 1;
+
   static const int _settingsIndex = 3;
 
   final PageController _controller = PageController();
@@ -73,8 +83,10 @@ class _AppShellState extends ConsumerState<AppShell> {
   /// 页面只构建一次：避免任何重建路径造成不必要的 widget 替换。
   late final List<Widget> _pages = <Widget>[
     _KeepAlivePage(child: HomePage(onOpenSettings: () => _goTo(_settingsIndex))),
-    const _KeepAlivePage(child: TasksPage()),
-    const _KeepAlivePage(child: StatsPage()),
+    // 第二格：任务 + 统计合并（2026-10-06）
+    const _KeepAlivePage(child: TaskStatsPage()),
+    // 第三格：课表（顶掉原来的「统计」）
+    const _KeepAlivePage(child: TimetablePage()),
     const _KeepAlivePage(child: ProfilePage()),
   ];
 
@@ -82,6 +94,76 @@ class _AppShellState extends ConsumerState<AppShell> {
   void initState() {
     super.initState();
     _controller.addListener(_onScroll);
+    // 首帧之后再弹手册 —— 让页面先画出来，弹层是"盖在界面上"出现的，
+    // 不是跟着第一帧一起挤进来
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _maybeShowStartupDialogs());
+  }
+
+  /// 首次打开（或者手册版本升了）时弹一次使用手册。
+  ///
+  /// 为什么放在外壳而不是 `HomePage` 里：手册讲的是**整个 App**，
+  /// 不是计时页一个页面；而且外壳能保证不管用户从哪一格进来都只弹一次。
+  ///
+  /// 弹过就立刻记下版本 —— 用户是滑完还是点「跳过」都算"看过了"，
+  /// 不该下次启动再弹一次烦他。
+  /// 启动时的两类弹窗，**更新说明在手册之前判**：
+  /// 全新安装（没看过手册）只弹手册不弹更新，判定要用"看没看过手册"，
+  /// 所以必须抢在手册把"看过"写进设置之前。
+  Future<void> _maybeShowStartupDialogs() async {
+    await _maybeShowUpdateDialog();
+    await _maybeShowManual();
+  }
+
+  /// 大版本升级后的老用户：弹一次「vX 更新了什么」。
+  /// 全新安装不弹（手册已经把一切讲了一遍），看过这个大版本就不再弹。
+  Future<void> _maybeShowUpdateDialog() async {
+    final SettingsRepository settings =
+        ref.read(settingsRepositoryProvider);
+    final String? seen =
+        await settings.readString(SettingsRepository.keyUpdateSeenVersion);
+    if (!shouldShowMajorUpdateDialog(seen, kAppVersion)) return;
+    // 手册从没弹过 = 全新安装：更新说明对他是噪音，直接记版本
+    final String? manualSeen =
+        await settings.readString(SettingsRepository.keyManualSeenVersion);
+    if (manualSeen == null) {
+      await settings.writeString(
+          SettingsRepository.keyUpdateSeenVersion, kAppVersion);
+      return;
+    }
+    if (kDebugMode) {
+      debugPrint('[UPDATE] 大版本升级（见过 ${seen ?? '无'} → $kAppVersion）弹更新说明');
+    }
+    if (!mounted) return;
+    await showUpdateDialog(context);
+    await settings.writeString(
+      SettingsRepository.keyUpdateSeenVersion,
+      kAppVersion,
+    );
+  }
+
+  Future<void> _maybeShowManual() async {
+    final SettingsRepository settings =
+        ref.read(settingsRepositoryProvider);
+    final String? seen =
+        await settings.readString(SettingsRepository.keyManualSeenVersion);
+
+    // debug 构建下打一行：排查"手册该弹却没弹"时，一眼看出是版本对上了
+    // 还是别的原因（release 不输出）
+    if (kDebugMode) {
+      debugPrint('[MANUAL] 已看过=${seen ?? '(没看过)'} '
+          '当前=$kManualVersion → '
+          '${seen == kManualVersion ? '不弹' : '弹'}');
+    }
+
+    if (seen == kManualVersion) return;
+    if (!mounted) return;
+
+    await showManualDialog(context, isFirstLaunch: true);
+    await settings.writeString(
+      SettingsRepository.keyManualSeenVersion,
+      kManualVersion,
+    );
   }
 
   @override
@@ -116,14 +198,14 @@ class _AppShellState extends ConsumerState<AppShell> {
   /// 因为页面被 [_KeepAlivePage] 保活，切回来不会重建、也就不会重新取数。
   /// 不主动刷的话，"刚跑完一个番茄 → 切到统计页"看到的还是旧数字。
   void _refreshFor(int index) {
-    if (index == _statsIndex) {
+    if (index == _combinedIndex) {
       // 统计是 FutureProvider：invalidate 会保留上一次的值（不会闪骨架），
       // 新数据回来后如果和旧的一样，柱状图也不会重播动画（见 _sameSeries）
       ref.invalidate(statsProvider);
-    } else if (index == _tasksIndex) {
       // 任务可能被后台的番茄计数改动过（原生服务在后台推进了阶段）
       unawaited(ref.read(taskListProvider.notifier).refresh());
     }
+    // 课表页（第三格）不依赖任何会自己变的数据，不用刷
   }
 
   @override

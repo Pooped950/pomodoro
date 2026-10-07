@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/app_info.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../domain/stats/stats_summary.dart';
@@ -8,6 +9,8 @@ import '../../providers/stats_provider.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/app_page_route.dart';
 import '../../widgets/pressable.dart';
+import '../manual/about_page.dart';
+import '../manual/manual_dialog.dart';
 import '../settings/import_timetable_page.dart';
 import '../settings/keepalive_page.dart';
 import '../settings/settings_detail_page.dart';
@@ -76,7 +79,7 @@ class ProfilePage extends ConsumerWidget {
                     _NavRow(
                       icon: Icons.calendar_month_outlined,
                       title: '导入课表',
-                      subtitle: '选一张课表截图，本机离线识别（不上传）',
+                      subtitle: '截两张课表截图，自动拼接 + 识别',
                       onTap: () =>
                           pushAppPage(context, const ImportTimetablePage()),
                     ),
@@ -86,44 +89,21 @@ class ProfilePage extends ConsumerWidget {
 
               const SizedBox(height: AppSpacing.section),
               AppCard(
+                padding: EdgeInsets.zero,
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Row(
-                      children: <Widget>[
-                        Text('一颗番茄', style: text.titleMedium),
-                        const Spacer(),
-                        Text(
-                          '版本 1.8.0',
-                          style: text.bodySmall?.copyWith(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurface
-                                .withValues(alpha: 0.45),
-                          ),
-                        ),
-                      ],
+                    _NavRow(
+                      icon: Icons.menu_book_outlined,
+                      title: '使用手册',
+                      subtitle: '计时 · 任务 · 统计 · 课表 · 保活设置',
+                      onTap: () => showManualDialog(context),
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '作者 小奋 · 开源协议 MIT',
-                      style: text.bodySmall?.copyWith(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.55),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '所有数据都存在这台手机上，不联网、不上传、不收集任何信息。',
-                      style: text.bodySmall?.copyWith(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.55),
-                        height: 1.6,
-                      ),
+                    const _RowDivider(),
+                    _NavRow(
+                      icon: Icons.info_outline_rounded,
+                      title: '关于',
+                      subtitle: '版本 $kAppVersion',
+                      onTap: () => pushAppPage(context, const AboutPage()),
                     ),
                   ],
                 ),

@@ -10,7 +10,7 @@ import '../../widgets/app_card.dart';
 import '../../widgets/fade_slide_in.dart';
 import '../../widgets/motion_scope.dart';
 
-/// 统计页 —— M5-③
+/// 统计视图 —— M5-③
 ///
 /// 「看清楚自己的专注习惯」。三块内容：
 ///   1. 今日概览：专注时长 / 完成番茄 / 休息时长
@@ -26,13 +26,21 @@ import '../../widgets/motion_scope.dart';
 ///
 /// `sessions` 会随使用无限增长，每次进页面全表扫会越来越慢。
 /// 7 天既能回答"我最近怎么样"，查询量又恒定。
-class StatsPage extends ConsumerWidget {
-  const StatsPage({super.key});
+///
+/// ## 为什么叫 View 不叫 Page（2026-10-06 改）
+///
+/// 和 `TasksView` 同样的情况：用户把「任务」和「统计」合并成导航第二格，
+/// 顶部两个小标签切换（见 `TaskStatsPage`）。原来那行「统计 + 刷新按钮」
+/// 的标题行拿掉了 —— 标签本身就是标题。刷新入口搬到容器页顶部。
+///
+/// 下拉刷新（`RefreshIndicator`）留在视图里，因为它属于"这一页内容"的手势，
+/// 不该跟着标题行走。
+class StatsView extends ConsumerWidget {
+  const StatsView({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AsyncValue<StatsData> async = ref.watch(statsProvider);
-    final TextTheme text = Theme.of(context).textTheme;
     final DateTime now = DateTime.now();
 
     // 首次加载（还没有任何数据）时才显示骨架，避免"先闪一下空状态再跳成数据"。
@@ -62,18 +70,6 @@ class StatsPage extends ConsumerWidget {
                 kBottomNavSpace,
               ),
               children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    Expanded(child: Text('统计', style: text.titleLarge)),
-                    IconButton(
-                      onPressed: () => ref.invalidate(statsProvider),
-                      icon: const Icon(Icons.refresh_rounded),
-                      tooltip: '刷新',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: AppSpacing.tight),
-
                 if (firstLoad)
                   const _Skeleton()
                 else if (data.isEmpty)
@@ -809,7 +805,7 @@ class _EmptyStats extends StatelessWidget {
           Text(
             '跑完第一个番茄后，这里会显示你的专注时长、'
             '近 $kStatsWindowDays 天的趋势，以及时间花在了哪些任务上。'
-            '所有数据都来自本机记录，不上传。',
+            '数据来自每一次专注的记录。',
             style: text.bodyMedium?.copyWith(
               color: scheme.onSurface.withValues(alpha: 0.6),
               height: 1.6,

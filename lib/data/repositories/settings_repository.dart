@@ -32,6 +32,17 @@ class SettingsRepository {
   /// 主页背景（预设色卡 / 相册照片）。
   static const String keyBackground = 'background';
 
+  /// **用户已经看过的使用手册版本**。
+  ///
+  /// 启动时拿它和 `kManualVersion` 比：不一样就弹一次手册。
+  /// 所以首次安装会弹、发了新版本也会弹（顺便让老用户看到更新内容）。
+  static const String keyManualSeenVersion = 'manual_seen_version';
+
+  /// 上次弹过「大版本更新」弹窗时的 App 版本。
+  /// 启动时和 `kAppVersion` 比 **major 段**：见过的小于当前的大版本就弹
+  /// （小版本/补丁不弹，见 `update_dialog.dart` 的 `shouldShowMajorUpdateDialog`）。
+  static const String keyUpdateSeenVersion = 'update_seen_version';
+
   /// 读一个字符串值；没存过 / 类型不对返回 null
   Future<String?> readString(String key) async {
     final List<Map<String, Object?>> rows = await _db.query(

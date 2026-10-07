@@ -9,18 +9,29 @@ import '../../widgets/app_context_menu.dart';
 import '../../widgets/app_dialog.dart';
 import '../../widgets/pressable.dart';
 
-/// 任务页 —— M5-①
+/// 任务视图 —— M5-①
 ///
 /// 「把番茄绑定到具体任务，知道自己专注的时间花在了哪里」。
 /// 列表分两段：**进行中**（按手动排序）在上，**已完成**沉底置灰。
-class TasksPage extends ConsumerWidget {
-  const TasksPage({super.key});
+///
+/// ## 为什么叫 View 不叫 Page（2026-10-06 改）
+///
+/// 它不再独占一个底部标签了 —— 用户把「任务」和「统计」合并成了导航第二格，
+/// 顶部两个小标签切换（见 `TaskStatsPage`）。所以原来那行
+/// 「任务 + 新建按钮」的标题行被拿掉：**标签本身就是标题**，
+/// 再画一行"任务"就重复了。新建入口随之搬到容器页顶部，
+/// 通过公开的 [showTaskEditor] 唤起。
+///
+/// 自己的 `SafeArea` / `Center` / `ConstrainedBox` 保留着 ——
+/// 外面再套一层同样的壳没有副作用（`SafeArea` 会消费掉安全区，内层拿到的是 0），
+/// 换来的是这个视图**可以单独拿出来跑**（预览 / 单测）而不用再配壳。
+class TasksView extends ConsumerWidget {
+  const TasksView({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final List<Task> tasks = ref.watch(sortedTasksProvider);
     final TaskListNotifier notifier = ref.read(taskListProvider.notifier);
-    final TextTheme text = Theme.of(context).textTheme;
 
     final List<Task> active =
         tasks.where((Task t) => !t.isDone).toList(growable: false);
@@ -40,18 +51,6 @@ class TasksPage extends ConsumerWidget {
               kBottomNavSpace,
             ),
             children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(child: Text('任务', style: text.titleLarge)),
-                  IconButton(
-                    onPressed: () => _openEditor(context, notifier),
-                    icon: const Icon(Icons.add_rounded),
-                    tooltip: '新建任务',
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.tight),
-
               if (tasks.isEmpty)
                 const _EmptyHint()
               else ...<Widget>[
@@ -67,7 +66,7 @@ class TasksPage extends ConsumerWidget {
                             onToggle: () => notifier.toggleDone(active[i]),
                             onMore: (Rect anchor) => _openTaskMenu(
                               context,
-                              notifier,
+                              ref,
                               active[i],
                               anchor,
                             ),
@@ -91,7 +90,7 @@ class TasksPage extends ConsumerWidget {
                             onToggle: () => notifier.toggleDone(done[i]),
                             onMore: (Rect anchor) => _openTaskMenu(
                               context,
-                              notifier,
+                              ref,
                               done[i],
                               anchor,
                             ),
@@ -122,12 +121,17 @@ class TasksPage extends ConsumerWidget {
   /// 菜单跑到底部，手指和视线都要跨越整屏，还看不出"这个菜单属于哪一条"。
   ///
   /// [anchor] 是「三个点」按钮在**全局坐标**下的矩形，由 [_TaskRow] 量出来。
+  ///
+  /// ⚠️ 菜单是 `await` 出来的，期间页面可能已经被销毁。所以 notifier 在
+  /// await **之前**就抓好，之后一律用这个引用，不再碰 `ref`。
   Future<void> _openTaskMenu(
     BuildContext context,
-    TaskListNotifier notifier,
+    WidgetRef ref,
     Task task,
     Rect anchor,
   ) async {
+    final TaskListNotifier notifier = ref.read(taskListProvider.notifier);
+
     final String? action = await showAppContextMenu<String>(
       context: context,
       anchor: anchor,
@@ -150,32 +154,42 @@ class TasksPage extends ConsumerWidget {
     // await 之后 context 可能已经失效（页面被销毁），必须检查
     if (!context.mounted) return;
     if (action == 'edit') {
-      await _openEditor(context, notifier, existing: task);
+      await showTaskEditor(context, notifier, existing: task);
     } else if (action == 'delete') {
       await notifier.delete(task);
     }
   }
+}
 
-  /// 新建 / 编辑任务。传 [existing] 就是编辑。
-  Future<void> _openEditor(
-    BuildContext context,
-    TaskListNotifier notifier, {
-    Task? existing,
-  }) async {
-    // 用 showAppDialog 而不是 showDialog：后者进出场写死 150ms，
-    // 在别的动画都放到 380~420ms 之后会显得"啪"地砸出来（详见其注释）
-    final ({String title, int estimated})? result =
-        await showAppDialog<({String title, int estimated})>(
-      context: context,
-      builder: (BuildContext _) => _TaskEditorDialog(existing: existing),
-    );
-    if (result == null) return;
+/// 唤起「新建 / 编辑任务」对话框。传 [existing] 就是编辑。
+///
+/// ## 为什么是**公开的顶层函数**（2026-10-06 改）
+///
+/// 唤起它的入口已经不在这个文件里了 —— 第二页顶部那排「任务 / 统计」标签
+/// 右边的「+」由容器页 `TaskStatsPage` 提供。提成顶层函数两边共用一份，
+/// 不会出现"从列表里点编辑"和"从 + 点新建"弹出两个长得不一样的框。
+///
+/// 参数收的是 [notifier] 而不是 `WidgetRef`：调用方（菜单那条路径）
+/// 是 `await` 之后才走到这里的，那时页面可能已经销毁，再 `ref.read` 会抛异常。
+///
+/// 用 `showAppDialog` 而不是 `showDialog`：后者进出场写死 150ms，
+/// 在别的动画都放到 380~420ms 之后会显得"啪"地砸出来（详见其注释）。
+Future<void> showTaskEditor(
+  BuildContext context,
+  TaskListNotifier notifier, {
+  Task? existing,
+}) async {
+  final ({String title, int estimated})? result =
+      await showAppDialog<({String title, int estimated})>(
+    context: context,
+    builder: (BuildContext _) => TaskEditorDialog(existing: existing),
+  );
+  if (result == null) return;
 
-    if (existing == null) {
-      await notifier.add(result.title, result.estimated);
-    } else {
-      await notifier.edit(existing, result.title, result.estimated);
-    }
+  if (existing == null) {
+    await notifier.add(result.title, result.estimated);
+  } else {
+    await notifier.edit(existing, result.title, result.estimated);
   }
 }
 
@@ -409,16 +423,16 @@ class _TaskRowState extends State<_TaskRow> {
 }
 
 /// 新建 / 编辑对话框：标题 + 预估番茄数
-class _TaskEditorDialog extends StatefulWidget {
-  const _TaskEditorDialog({this.existing});
+class TaskEditorDialog extends StatefulWidget {
+  const TaskEditorDialog({super.key, this.existing});
 
   final Task? existing;
 
   @override
-  State<_TaskEditorDialog> createState() => _TaskEditorDialogState();
+  State<TaskEditorDialog> createState() => TaskEditorDialogState();
 }
 
-class _TaskEditorDialogState extends State<_TaskEditorDialog> {
+class TaskEditorDialogState extends State<TaskEditorDialog> {
   late final TextEditingController _controller =
       TextEditingController(text: widget.existing?.title ?? '');
   late int _estimated = widget.existing?.estimatedPomodoros ?? 1;

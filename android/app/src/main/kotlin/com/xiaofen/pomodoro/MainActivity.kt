@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
@@ -62,6 +63,51 @@ class MainActivity : FlutterActivity() {
     }
 
     private var keepAliveChannel: MethodChannel? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requestTopRefreshRate()
+    }
+
+    /**
+     * 申请面板支持的**最高刷新率**（同分辨率模式里挑）。
+     *
+     * ## 为什么必须显式申请（2026-10-07，用户报"动画掉帧不够丝滑"）
+     *
+     * HyperOS 对普通应用默认给 60Hz：Flutter 的 vsync 跟着 surface 走，
+     * 不申请的话整套动画都压在 60 帧上限里 —— 渲染再快也白搭。
+     * `preferredDisplayModeId` 是窗口级申请，系统在能力范围内会尽量满足；
+     * 用户的机型是 1-120Hz LTPO，申请后动画上限即到 120。
+     *
+     * ## 为什么按"同分辨率"过滤
+     *
+     * LTPO 的 mode 列表里有各种分辨率×刷新率的组合，直接挑 refreshRate
+     * 最高可能选中一个不同分辨率的 mode，切过去会黑屏或重建 surface。
+     */
+    private fun requestTopRefreshRate() {
+        try {
+            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                display
+            } else {
+                @Suppress("DEPRECATION")
+                window.windowManager.defaultDisplay
+            } ?: return
+            val current = display.mode
+            val best = display.supportedModes
+                .filter {
+                    it.physicalWidth == current.physicalWidth &&
+                        it.physicalHeight == current.physicalHeight
+                }
+                .maxByOrNull { it.refreshRate } ?: return
+            if (best.modeId != current.modeId) {
+                window.attributes = window.attributes.also {
+                    it.preferredDisplayModeId = best.modeId
+                }
+            }
+        } catch (_: Exception) {
+            // 拿不到显示模式就维持系统默认，不影响任何功能
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

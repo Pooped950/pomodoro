@@ -378,7 +378,7 @@ class _ImageRow extends StatelessWidget {
               Text(
                 usingImage
                     ? _fileName(settings.imagePath!)
-                    : '从相册选一张，本机使用、不上传',
+                    : '从相册选一张',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: text.bodySmall?.copyWith(

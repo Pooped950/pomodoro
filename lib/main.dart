@@ -7,6 +7,7 @@ import 'data/repositories/session_repository.dart';
 import 'data/repositories/settings_repository.dart';
 import 'data/repositories/task_repository.dart';
 import 'data/repositories/timer_snapshot_repository.dart';
+import 'data/repositories/timetable_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,6 +26,9 @@ Future<void> main() async {
       settingsRepositoryProvider.overrideWithValue(SettingsRepository(database)),
       // M5：任务（把番茄绑定到具体任务）
       taskRepositoryProvider.overrideWithValue(TaskRepository(database)),
+      // 课表（v3）：课程 / 节次时间表 / 晚自习
+      timetableRepositoryProvider
+          .overrideWithValue(TimetableRepository(database)),
     ],
     child: const PomodoroApp(),
   ));
