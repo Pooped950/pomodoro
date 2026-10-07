@@ -7,6 +7,13 @@ library;
 
 const String kAppName = '一颗番茄';
 const String kAppVersion = '2.0.2';
+
+/// Android 的 **versionCode**（= `pubspec.yaml` 里 `version: x.y.z+N` 的那个 `N`）。
+///
+/// 为什么单列一个常量：检查更新时**只认 versionCode**（versionName 是给人看的，
+/// 拿字符串比大小会出错）。以前只写了版本号字符串，更新检查就没法可靠比对。
+/// `test/app_info_test.dart` 会拿它跟 pubspec 对账，防止漂移。
+const int kAppVersionCode = 3;
 // ⚠️ 2026-10-07 用户要求：不再出现作者署名 / 开源协议 / 数据存储相关的
 // 常量或文案 —— 产品形态以后可能变（闭源收费 / 数据上传）。
 // 现在这页只留名称和版本。
