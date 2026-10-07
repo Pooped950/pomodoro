@@ -10,7 +10,7 @@ import 'package:pomodoro/presentation/providers/update_provider.dart';
 
 import 'support/update_fakes.dart';
 
-/// 下载 → 安装这条链的**语义**（spec §7.4 / §7.5）。
+/// 下载 → 安装这条链的**语义**。
 ///
 /// 为什么测 notifier 而不是点界面上那些按钮：这段逻辑的状态机在 notifier 里，
 /// 界面只是把状态画出来（那部分在 `update_page_test.dart` 用固定状态测）。

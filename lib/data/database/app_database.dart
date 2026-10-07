@@ -12,7 +12,7 @@ import 'package:sqflite/sqflite.dart';
 /// 建表语句一律带 `IF NOT EXISTS`，让 onCreate 与 onUpgrade 两条路径
 /// 共用同一段代码、可重复执行。
 ///
-/// ⚠️ 2026-10-06 更正：交接文档曾写「v2 建表时 courses 表已存在」——**是错的**，
+/// ⚠️ 2026-10-06 更正：曾误记「v2 建表时 courses 表已存在」——**是错的**，
 /// 课表三张表是 v3 才加的（见 `_createV3Tables`）。
 class AppDatabase {
   AppDatabase._();

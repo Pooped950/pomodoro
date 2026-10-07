@@ -45,7 +45,7 @@ class SettingsUpdateStore implements UpdateStore {
 
 /// 拉版本文件、缓存它、按节流决定要不要真的发请求。
 ///
-/// 四条设计原则（都来自 spec §7.2 / §7.5）：
+/// 四条设计原则：
 ///   1. **静默失败**：任何异常都吞掉，只返回 null —— 检查更新绝不能影响 App 正常使用
 ///   2. **节流**：默认 10 分钟内只发一次（手动点「检查更新」用 `force: true` 绕过）
 ///   3. **缓存**：成功就把原文存起来，离线时还能显示"上次看到的最新版"
@@ -144,6 +144,10 @@ class UpdateService {
     }
   }
 
+  /// 节流窗口内（这次根本不用发请求）——
+  /// 上层拿它区分「跳过」和「失败」：跳过不该报错（评审 C1）
+  bool get isThrottled => _isThrottled();
+
   bool _isThrottled() {
     final DateTime? last = _lastCheckAt;
     if (last == null) return false;
@@ -160,7 +164,7 @@ class UpdateService {
     }
   }
 
-  /// 带时间戳，绕开 Gitee 的 CDN 缓存（Review Focus #1）
+  /// 带时间戳，绕开 Gitee 的 CDN 缓存
   String _urlWithCacheBuster(DateTime now) {
     final String sep = endpoint.contains('?') ? '&' : '?';
     return '$endpoint${sep}t=${now.millisecondsSinceEpoch}';

@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pomodoro/domain/update/update_decision.dart';
 import 'package:pomodoro/domain/update/update_info.dart';
 
-/// 更新决策矩阵（spec §14.1）—— 启动时"弹不弹、弹哪一档"全靠这个纯函数。
+/// 更新决策矩阵 —— 启动时"弹不弹、弹哪一档"全靠这个纯函数。
 void main() {
   final String sha = List<String>.filled(64, 'a').join();
 
