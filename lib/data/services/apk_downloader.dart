@@ -125,13 +125,16 @@ Future<bool> verifyApkSha256(String path, String expectedSha256) async {
 /// 清掉上次残留的下载文件（App 启动时调一次）。
 ///
 /// 只删 `.apk` / `.part`：临时目录里还可能有别的插件在用的东西。
-Future<void> clearStaleApkFiles(Directory dir) async {
+/// [keep] 是要留下的文件名（当前远端版本那个包）—— 它是校验通过才会存在的，
+/// 留着可以直接当"已下载"，省掉一次 84MB 重下（评审 I2）。
+Future<void> clearStaleApkFiles(Directory dir, {String? keep}) async {
   if (!dir.existsSync()) return;
   try {
     await for (final FileSystemEntity e in dir.list()) {
       if (e is! File) continue;
       final String name = e.path.toLowerCase();
       if (!name.endsWith('.apk') && !name.endsWith('.part')) continue;
+      if (keep != null && e.path.endsWith(keep)) continue;
       try {
         e.deleteSync();
       } catch (_) {

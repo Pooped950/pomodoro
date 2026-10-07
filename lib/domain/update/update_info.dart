@@ -144,10 +144,13 @@ class UpdateInfo {
     }
   }
 
+  /// 只接受 https 的展示链接。
+  /// 必须是 https：打开它的原生实现只放行 https，放过 http 就会出现
+  /// "按钮点了没反应"（评审 M4）。认不出就返回 null（界面不显示这个按钮）。
   static String? _parseLink(Object? value) {
     if (value is! String) return null;
     final Uri? uri = Uri.tryParse(value);
-    if (uri == null || !uri.hasScheme || uri.host.isEmpty) return null;
+    if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) return null;
     return value;
   }
 }

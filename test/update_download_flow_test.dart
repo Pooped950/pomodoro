@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pomodoro/core/app_info.dart';
+import 'package:pomodoro/data/repositories/settings_repository.dart';
 import 'package:pomodoro/data/services/apk_downloader.dart';
 import 'package:pomodoro/data/services/apk_installer.dart';
 import 'package:pomodoro/data/services/update_service.dart';
@@ -31,7 +33,6 @@ void main() {
     required String body,
     FakeDownloader? downloader,
     FakeInstaller? installer,
-    FreeSpaceProbe? probe,
   }) {
     final ProviderContainer c = ProviderContainer(
       overrides: [
@@ -43,7 +44,6 @@ void main() {
         apkDownloaderProvider.overrideWithValue(downloader ?? FakeDownloader()),
         apkInstallerProvider.overrideWithValue(installer ?? FakeInstaller()),
         updateTempDirProvider.overrideWith((Ref ref) async => tmp),
-        updateFreeSpaceProvider.overrideWithValue(probe),
       ],
     );
     addTearDown(c.dispose);
@@ -68,10 +68,9 @@ void main() {
     required String body,
     FakeDownloader? downloader,
     FakeInstaller? installer,
-    FreeSpaceProbe? probe,
   }) async {
-    final ProviderContainer c = container(
-        body: body, downloader: downloader, installer: installer, probe: probe);
+    final ProviderContainer c =
+        container(body: body, downloader: downloader, installer: installer);
     await c.read(updateStateProvider.notifier).checkNow();
     return c;
   }
@@ -158,20 +157,6 @@ void main() {
     expect(downloader.calls, 1, reason: '已经下好了就不该再下一次');
   });
 
-  test('空间不足 → 提示且根本不开始下载', () async {
-    final FakeDownloader downloader = FakeDownloader();
-    final ProviderContainer c = await ready(
-      body: versionJson(versionCode: kAppVersionCode + 1, sizeBytes: 100),
-      downloader: downloader,
-      probe: () async => 1,
-    );
-
-    await c.read(updateStateProvider.notifier).startDownload();
-
-    expect(c.read(updateStateProvider).downloadError, '手机剩余空间不足，先清一点再更新');
-    expect(downloader.calls, 0);
-  });
-
   test('包在服务器上不存在（404）→ 翻译成人话', () async {
     final ProviderContainer c = await ready(
       body: versionJson(versionCode: kAppVersionCode + 1, sizeBytes: 5),
@@ -199,5 +184,84 @@ void main() {
         c, (UpdateState s) => s.downloadError != null);
 
     expect(s.downloadError, '手机剩余空间不足，先清一点再更新');
+  });
+
+  test('★ 节流窗口内再检查 → 不是「检查失败」，显示缓存里的最新版（评审 C1）',
+      () async {
+    // 造出"10 分钟内刚检查过"的现场：启动检查记录 lastCheckAt，用户随后打开页面
+    store.values[SettingsRepository.keyUpdateLastCheckAt] =
+        DateTime.now().toIso8601String();
+    store.values[SettingsRepository.keyUpdateCachedJson] =
+        versionJson(versionCode: kAppVersionCode + 1, versionName: '9.9.9');
+
+    final ProviderContainer c = ProviderContainer(
+      overrides: [
+        updateServiceProvider.overrideWithValue(UpdateService(
+          store: store,
+          // 节流窗口内**根本不该发请求**：真发了就让这个测试炸
+          fetcher: (String url) async => throw StateError('节流窗口内不该发请求'),
+          endpoint: 'https://example.test/version.json',
+        )),
+        apkDownloaderProvider.overrideWithValue(FakeDownloader()),
+        apkInstallerProvider.overrideWithValue(FakeInstaller()),
+        updateTempDirProvider.overrideWith((Ref ref) async => tmp),
+      ],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(updateStateProvider.notifier).checkIfStale();
+
+    final UpdateState s = c.read(updateStateProvider);
+    expect(s.error, isNull, reason: '被节流跳过不是失败，不能报「检查失败」');
+    expect(s.remote?.versionName, '9.9.9', reason: '该显示上次缓存到的最新版本');
+  });
+
+  test('★ 远端换了版本 → 之前下好的包作废，不再显示「安装」（评审 I4）', () async {
+    String body = versionJson(versionCode: kAppVersionCode + 1, sizeBytes: 5);
+    final ProviderContainer c = ProviderContainer(
+      overrides: [
+        updateServiceProvider.overrideWithValue(UpdateService(
+          store: store,
+          fetcher: (String url) async => body,
+          endpoint: 'https://example.test/version.json',
+        )),
+        apkDownloaderProvider.overrideWithValue(FakeDownloader()),
+        apkInstallerProvider.overrideWithValue(FakeInstaller()),
+        updateTempDirProvider.overrideWith((Ref ref) async => tmp),
+      ],
+    );
+    addTearDown(c.dispose);
+
+    await c.read(updateStateProvider.notifier).checkNow();
+    await c.read(updateStateProvider.notifier).startDownload();
+    await waitFor(c, (UpdateState s) => s.downloadedPath != null);
+
+    // 远端又发了一版
+    body = versionJson(
+        versionCode: kAppVersionCode + 2, versionName: '9.9.10', sizeBytes: 5);
+    await c.read(updateStateProvider.notifier).checkNow();
+
+    final UpdateState s = c.read(updateStateProvider);
+    expect(s.remote?.versionCode, kAppVersionCode + 2);
+    expect(s.downloadedPath, isNull,
+        reason: '旧包不能当新版递给用户去装');
+  });
+
+  test('取消下载 → 进度归零，且不留"可安装"的包', () async {
+    // 用 broadcast：单订阅的 controller 在「yield* 转发 + 取消」时可能卡住
+    final StreamController<ApkDownloadProgress> chunks =
+        StreamController<ApkDownloadProgress>.broadcast();
+    addTearDown(chunks.close);
+    final ProviderContainer c = await ready(
+      body: versionJson(versionCode: kAppVersionCode + 1, sizeBytes: 5),
+      downloader: FakeDownloader(stream: chunks.stream),
+    );
+
+    await c.read(updateStateProvider.notifier).startDownload();
+    await c.read(updateStateProvider.notifier).cancelDownload();
+
+    final UpdateState s = c.read(updateStateProvider);
+    expect(s.downloading, isFalse);
+    expect(s.downloadedPath, isNull);
   });
 }

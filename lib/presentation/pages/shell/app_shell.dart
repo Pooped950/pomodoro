@@ -115,7 +115,13 @@ class _AppShellState extends ConsumerState<AppShell> {
   ///
   /// ⚠️ 「全新安装」的判据是"手册还没弹过"，所以两个键都要在动手之前读完。
   Future<void> _maybeShowStartupDialogs() async {
-    await ref.read(updateStateProvider.notifier).checkIfStale();
+    // ⚠️ 不阻塞启动（评审 I1）：这一步要读网络，网络"挂着不响应"时（学校 WiFi
+    // 的常态）会拖满 5 秒超时，首启手册也跟着迟到。所以只等 1.2 秒：
+    // 等不到就按"这次没有远端信息"继续，检查在后台跑完照样更新小红点和页面。
+    await ref
+        .read(updateStateProvider.notifier)
+        .checkIfStale()
+        .timeout(const Duration(milliseconds: 1200), onTimeout: () {});
     if (!mounted) return;
 
     final SettingsRepository settings = ref.read(settingsRepositoryProvider);
@@ -176,7 +182,8 @@ class _AppShellState extends ConsumerState<AppShell> {
       version: remote.versionName,
       notes: remote.notes.isEmpty ? null : remote.notes,
       force: force,
-      onUpdate: force ? () => pushAppPage(context, const UpdatePage()) : null,
+      // 两档都给"去更新"的入口：prompt 档原来只传了文案、没有动作（评审 I5）
+      onUpdate: () => pushAppPage(context, const UpdatePage()),
     );
 
     // prompt 档：记下"这个版本弹过了"，同一个版本不再弹

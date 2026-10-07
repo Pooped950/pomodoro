@@ -238,6 +238,28 @@ class UpdateDialogBody extends StatelessWidget {
                         child: const Text('退出'),
                       ),
                     ),
+                  ] else if (onUpdate != null) ...<Widget>[
+                    // 远端提示档：主按钮去更新，「以后再说」才是关闭。
+                    // 评审 I5：原来这里只有一个「开始使用」，等于只告诉用户"有新版本"
+                    // 却不给任何动作 —— 而这正是 App 最主要的更新通知。
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          onUpdate!();
+                        },
+                        child: const Text('立即更新'),
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.tight),
+                    Align(
+                      alignment: Alignment.center,
+                      child: TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('以后再说'),
+                      ),
+                    ),
                   ] else
                     SizedBox(
                       width: double.infinity,

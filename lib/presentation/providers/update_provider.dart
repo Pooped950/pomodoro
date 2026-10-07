@@ -23,6 +23,7 @@ class UpdateState {
     this.action = UpdateAction.none,
     this.progress,
     this.downloadedPath,
+    this.downloadedVersionCode,
     this.downloadError,
     this.installHint,
     this.needsInstallPermission = false,
@@ -49,6 +50,10 @@ class UpdateState {
   /// 已经下载并校验通过的 APK 路径（有它就显示「安装」）
   final String? downloadedPath;
 
+  /// [downloadedPath] 那个包是**哪个 versionCode** 的。
+  /// 远端一换版本，它就作废了 —— 否则会把旧包当"新版"递给用户装（评审 I4）
+  final int? downloadedVersionCode;
+
   /// 下载/校验失败的提示
   final String? downloadError;
 
@@ -73,6 +78,7 @@ class UpdateState {
     UpdateAction? action,
     double? progress,
     String? downloadedPath,
+    int? downloadedVersionCode,
     String? downloadError,
     String? installHint,
     bool? needsInstallPermission,
@@ -89,6 +95,8 @@ class UpdateState {
         action: action ?? this.action,
         progress: clearProgress ? null : (progress ?? this.progress),
         downloadedPath: downloadedPath ?? this.downloadedPath,
+        downloadedVersionCode:
+            downloadedVersionCode ?? this.downloadedVersionCode,
         downloadError:
             clearDownloadError ? null : (downloadError ?? this.downloadError),
         installHint: clearInstallHint ? null : (installHint ?? this.installHint),
@@ -114,13 +122,10 @@ final apkInstallerProvider =
 final updateTempDirProvider =
     FutureProvider<Directory>((Ref ref) => getTemporaryDirectory());
 
-/// 可用空间探测。
-///
-/// Flutter 没有跨平台的磁盘空间 API，所以默认是 **null = 不做预检查**，
-/// 改成把写入失败（ENOSPC）翻译成"空间不足"。测试可以注入假探测来验那段逻辑。
-typedef FreeSpaceProbe = Future<int> Function();
-
-final updateFreeSpaceProvider = Provider<FreeSpaceProbe?>((Ref ref) => null);
+// 关于"空间够不够"：Flutter 没有跨平台的磁盘空间 API，所以**不做下载前预检查**，
+// 而是把写入失败（ENOSPC）翻译成「手机剩余空间不足，先清一点再更新」——
+// 结果是用户看到的话一样，代价是可能白下一部分。真要预检查得走原生 StatFs
+// （账本里记成待办；评审 I3：原先留了个恒为 null 的 provider 和一条永远走不到的分支）
 
 final updateStateProvider =
     NotifierProvider<UpdateNotifier, UpdateState>(UpdateNotifier.new);
@@ -161,38 +166,28 @@ class UpdateNotifier extends Notifier<UpdateState> {
   /// 点「立即更新」：下载到临时目录并校验 sha256
   Future<void> startDownload() async {
     final UpdateInfo? info = state.remote;
-    if (info == null || state.downloading) return;
-
-    final Directory dir;
+    // `state.downloading` 是"已经在下"，`_starting` 是"正在准备下"：
+    // 两者之间有两个 await，不挡住的话连点两下会开两条流写同一个文件（评审 M2）
+    if (info == null || state.downloading || _starting) return;
+    _starting = true;
     try {
-      dir = await ref.read(updateTempDirProvider.future);
-    } catch (_) {
-      state = state.copyWith(downloadError: '下载失败，请重试');
-      return;
-    }
-
-    final FreeSpaceProbe? probe = ref.read(updateFreeSpaceProvider);
-    if (probe != null) {
+      final Directory dir;
       try {
-        final int free = await probe();
-        // 留 100MB 余量：装包阶段系统还要占空间
-        if (free < info.sizeBytes + 100 * 1024 * 1024) {
-          state = state.copyWith(downloadError: '手机剩余空间不足，先清一点再更新');
-          return;
-        }
+        dir = await ref.read(updateTempDirProvider.future);
       } catch (_) {
-        // 探测失败就照常下载：宁可让写入失败来兜底
+        state = state.copyWith(downloadError: '下载失败，请重试');
+        return;
       }
-    }
 
-    final String dest =
-        '${dir.path}/updates/pomodoro-${info.versionName}.apk';
-    state = state.copyWith(
-      progress: 0,
-      downloadedPath: null,
-      clearDownloadError: true,
-      clearInstallHint: true,
-    );
+      final String dest =
+          '${dir.path}/updates/${_apkFileName(info.versionName)}';
+      state = state.copyWith(
+        progress: 0,
+        downloadedPath: null,
+        downloadedVersionCode: info.versionCode,
+        clearDownloadError: true,
+        clearInstallHint: true,
+      );
 
     _sub = ref
         .read(apkDownloaderProvider)
@@ -213,9 +208,12 @@ class UpdateNotifier extends Notifier<UpdateState> {
           downloadError: _downloadErrorMessage(e),
         );
       },
-      onDone: () => unawaited(_finishDownload(dest, info.sha256)),
-      cancelOnError: true,
-    );
+        onDone: () => unawaited(_finishDownload(dest, info.sha256)),
+        cancelOnError: true,
+      );
+    } finally {
+      _starting = false;
+    }
   }
 
   /// 用户点「取消」：停掉下载，进度归零（已下载的 .part 由下载器自己清）
@@ -291,9 +289,25 @@ class UpdateNotifier extends Notifier<UpdateState> {
   // ------------------------------------------------------------------
 
   Future<void> _run({required bool force}) async {
-    state = state.copyWith(checking: true, clearError: true);
-    final UpdateInfo? fresh = await _service.check(force: force);
-    await _collect(fresh: fresh, failed: fresh == null);
+    await _ensureWarmUp(); // 先让 lastCheckAt 就位，才判得出"这次要不要发请求"
+    if (!ref.mounted) return;
+    if (_checking) return; // 行和外壳可能同时触发第一次检查（评审 M2）
+
+    // ⚠️ 评审 C1：节流窗口内 `check()` 返回 null，但那**不是失败**。
+    // 原来一律按失败处理，于是"已经是最新"的用户打开页面会看到「检查失败，稍后再试」。
+    if (!force && _service.isThrottled) {
+      await _collect(fresh: _service.cached, failed: false);
+      return;
+    }
+
+    _checking = true;
+    try {
+      state = state.copyWith(checking: true, clearError: true);
+      final UpdateInfo? fresh = await _service.check(force: force);
+      await _collect(fresh: fresh, failed: fresh == null);
+    } finally {
+      _checking = false;
+    }
   }
 
   Future<void> _refreshFromCache() async {
@@ -308,27 +322,46 @@ class UpdateNotifier extends Notifier<UpdateState> {
     await _ensureWarmUp();
     if (!ref.mounted) return;
     final UpdateInfo? remote = fresh ?? _service.cached;
+
+    // 下载/安装的中间状态跨过一次检查要保留（用户可能边下边点了重新检查），
+    // 但**远端换版本了就不作数** —— 否则会把旧包当新版递过去装（评审 I4）
+    final bool keepDownload = state.downloadedPath != null &&
+        state.downloadedVersionCode == remote?.versionCode;
+    // 启动时从磁盘认回来的那个包（见 _cleanOldApks）：只有版本对得上才敢用
+    final bool restoreOk =
+        _restoredPath != null && _restoredCode == remote?.versionCode;
+
+    final String? downloaded =
+        keepDownload ? state.downloadedPath : (restoreOk ? _restoredPath : null);
+    final int? downloadedCode = downloaded == null
+        ? null
+        : (keepDownload ? state.downloadedVersionCode : _restoredCode);
+
     state = UpdateState(
       remote: remote,
       checkedAt: _service.lastCheckAt,
       checking: false,
       error: failed ? '检查失败，稍后再试' : null,
       action: _decide(remote),
-      // 下载/安装的中间状态跨过一次检查要保留：用户可能边下边点了重新检查
       progress: state.progress,
-      downloadedPath: state.downloadedPath,
+      downloadedPath: downloaded,
+      downloadedVersionCode: downloadedCode,
       downloadError: state.downloadError,
-      installHint: state.installHint,
-      needsInstallPermission: state.needsInstallPermission,
+      installHint: keepDownload ? state.installHint : null,
+      needsInstallPermission:
+          keepDownload && state.needsInstallPermission,
     );
   }
 
-  /// 只重算 action（弹过之后降级用），不改变 remote/checkedAt
+  /// 重算 action（弹过之后降级用）—— 顺带把缓存里的版本信息补上：
+  /// 否则首帧到第一次检查落地之间，界面拿不到 remote（评审 M1）
   Future<void> _refreshState() async {
+    final UpdateInfo? remote = state.remote ?? _service.cached;
     state = state.copyWith(
+      remote: remote,
       checkedAt: _service.lastCheckAt,
       checking: false,
-      action: _decide(state.remote),
+      action: _decide(remote),
     );
   }
 
@@ -337,6 +370,38 @@ class UpdateNotifier extends Notifier<UpdateState> {
   Future<void> _doWarmUp() async {
     await _service.warmUp();
     _prompted = await _service.promptedVersionCode();
+    await _cleanOldApks();
+  }
+
+  /// 启动时收拾上一版留下的安装包：只留**当前远端版本**那一个（评审 I2）。
+  ///
+  /// 留下来的那个一定"写完并校验过"—— 改名发生在字节数和 sha256 都通过之后，
+  /// 所以磁盘上存在这个文件 = 它是好的，可以直接当「已下载」用，省掉一次 84MB 重下。
+  Future<void> _cleanOldApks() async {
+    try {
+      final Directory dir = await ref.read(updateTempDirProvider.future);
+      final UpdateInfo? remote = _service.cached;
+      final String? keep =
+          remote == null ? null : _apkFileName(remote.versionName);
+      await clearStaleApkFiles(dir, keep: keep);
+
+      if (keep == null) return;
+      final File f = File('${dir.path}/updates/$keep');
+      if (f.existsSync()) {
+        _restoredPath = f.path;
+        _restoredCode = remote!.versionCode;
+      }
+    } catch (_) {
+      // 清理失败不影响任何功能
+    }
+  }
+
+  /// 落盘文件名：远端来的 versionName 不能直接拼进路径（`../` 会跑出 FileProvider
+  /// 暴露的范围，用户只会看到「这个系统不让直接装」）。评审 M3
+  static String _apkFileName(String versionName) {
+    final String safe =
+        versionName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    return 'pomodoro-$safe.apk';
   }
 
   static String _downloadErrorMessage(Object e) {
@@ -352,6 +417,16 @@ class UpdateNotifier extends Notifier<UpdateState> {
 
   /// 预热只跑一次：把 future 存下来，并发的调用（首帧 + 第一次检查）等同一个
   Future<void>? _warmUpFuture;
+
+  /// 「正在准备下载」（同步互斥用，见 startDownload）
+  bool _starting = false;
+
+  /// 「正在检查」——两个入口可能同时触发，只让一个真跑
+  bool _checking = false;
+
+  /// 启动时从磁盘认回来的安装包路径 + 它对应的远端版本号
+  String? _restoredPath;
+  int? _restoredCode;
 
   /// 正在跑的下载
   StreamSubscription<ApkDownloadProgress>? _sub;

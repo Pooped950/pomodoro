@@ -177,4 +177,38 @@ void main() {
       expect(updated, isTrue);
     });
   });
+
+  group('远端提示档（prompt）', () {
+    testWidgets('★ 有「立即更新」和「以后再说」，点更新会进更新页（评审 I5）',
+        (WidgetTester tester) async {
+      bool went = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (BuildContext ctx) => FilledButton(
+                onPressed: () => showUpdateDialog(
+                  ctx,
+                  version: '9.9.9',
+                  notes: <String>['有新版本'],
+                  onUpdate: () => went = true,
+                ),
+                child: const Text('打开'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('立即更新'), findsOneWidget);
+      expect(find.text('以后再说'), findsOneWidget);
+      expect(find.text('开始使用'), findsNothing);
+
+      await tester.tap(find.text('立即更新'));
+      await tester.pumpAndSettle();
+      expect(went, isTrue);
+    });
+  });
 }
