@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  检查更新用：只把 cache/updates 这一个子目录暴露给系统安装器。
+
+  为什么只给一个子目录：FileProvider 暴露的路径越少越好 —— 安装器只需要读到
+  那个下载好的 APK，没有理由让它能读整个缓存目录。
+-->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>

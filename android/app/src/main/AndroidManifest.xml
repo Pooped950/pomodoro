@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <!-- M3 阶段四：保活引导页要用标准对话框申请「电池无限制」（比跳 MIUI 页面更通用） -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 检查更新：读 Gitee 上的版本文件 + 下载 APK -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 检查更新：把下载好的 APK 交给系统安装器（用户仍要自己点「安装」） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <application
         android:label="一颗番茄"
         android:name="${applicationName}"
@@ -52,6 +56,17 @@
         <receiver
             android:name=".TimerAlarmReceiver"
             android:exported="false" />
+        <!-- 检查更新：把 cache/updates 下的 APK 通过 FileProvider 交给系统安装器。
+             authorities 用 applicationId 拼，以后换包名不用改这里 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

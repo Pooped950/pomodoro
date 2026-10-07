@@ -13,9 +13,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 /**
  * 承载两条 MethodChannel：
@@ -63,6 +65,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private var keepAliveChannel: MethodChannel? = null
+    private var installerChannel: MethodChannel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -182,11 +185,79 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // ---- 检查更新：调起系统安装器 ----
+        // 第三方 App 不能静默装包，这里只做三件事：查权限 / 跳授权页 / 拉起安装器
+        val installer = MethodChannel(messenger, "pomodoro/installer")
+        installerChannel = installer
+        installer.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "canInstall" -> result.success(canRequestInstall())
+                "openSettings" -> result.success(openInstallPermissionSettings())
+                "install" -> {
+                    val path = (call.arguments as? Map<*, *>)?.get("path") as? String
+                    result.success(installApk(path))
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    /** API 26 起才有「安装未知应用」开关，更低版本一律放行 */
+    private fun canRequestInstall(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            packageManager.canRequestPackageInstalls()
+        } else {
+            true
+        }
+
+    /** 跳到本应用的「安装未知应用」授权页 */
+    private fun openInstallPermissionSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        return try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")
+                )
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 拉起系统安装器。
+     *
+     * 返回给 Dart 侧的三种结论：
+     *   "started"        —— 安装界面已经起来（用户还要在那边点「安装」）
+     *   "needPermission" —— 还没授权"安装未知应用"
+     *   "unsupported"    —— 文件不在 / 系统或 ROM 走不通
+     */
+    private fun installApk(path: String?): String {
+        if (path.isNullOrBlank()) return "unsupported"
+        val file = File(path)
+        if (!file.exists()) return "unsupported"
+        if (!canRequestInstall()) return "needPermission"
+        return try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            "started"
+        } catch (e: Exception) {
+            "unsupported"
+        }
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         serviceChannel = null
         keepAliveChannel = null
+        installerChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 
