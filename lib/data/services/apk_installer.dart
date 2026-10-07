@@ -71,6 +71,18 @@ class ApkInstaller {
     }
   }
 
+  /// 用浏览器打开发布页（复用同一个原生通道，省一个 url_launcher 插件）。
+  /// 只放行 https：这个链接来自远端版本文件，不能是任意 scheme。
+  Future<void> openDownloadPage(String url) async {
+    if (!url.startsWith('https://')) return;
+    try {
+      await _channel
+          .invokeMethod<void>('openUrl', <String, Object?>{'url': url});
+    } catch (_) {
+      // 打不开就只在界面上留着链接文本，不打扰
+    }
+  }
+
   /// 供测试与外部引用（避免 analyzer 认为常量没用）
   static MethodChannel get channel => _defaultChannel;
 }

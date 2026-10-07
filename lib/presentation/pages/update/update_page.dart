@@ -16,24 +16,20 @@ import '../../widgets/app_card.dart';
 /// 弹窗装不下，而且下载过程需要一个"待得住"的地方。
 /// 启动时的更新提示仍然是弹窗（`update_dialog.dart`）——那才是"扫一眼就走"的场景。
 ///
-/// ## 两个回调为什么从外面传
+/// ## 下载 → 安装只有一条状态线
 ///
-/// [onUpdate]（下载并安装）和 [onOpenPage]（浏览器打开发布页）都涉及原生能力，
-/// 由接线的地方注入：这样这一页在宿主机单测里能完整测四种状态，不用起原生通道。
+/// `hasNewer` → 点「立即更新」→ 进度 → 校验 sha256 → 出现「安装」→ 系统安装器。
+/// 每一步的失败都在**页内**给一句人话 + 一个重试，不弹窗、不跳走。
+/// 原生能力（下载器 / 安装桥接）都从 provider 拿，测试里换成假的即可。
 class UpdatePage extends ConsumerWidget {
-  const UpdatePage({super.key, this.onUpdate, this.onOpenPage});
-
-  /// 点「立即更新」：下载 + 校验 + 调起安装器（Task 8 接）
-  final Future<void> Function()? onUpdate;
-
-  /// 点「打开发布页」（Task 7 的原生通道接）
-  final Future<void> Function(String url)? onOpenPage;
+  const UpdatePage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final TextTheme text = Theme.of(context).textTheme;
     final UpdateState state = ref.watch(updateStateProvider);
+    final UpdateNotifier notifier = ref.read(updateStateProvider.notifier);
     final UpdateInfo? remote = state.remote;
     final bool hasNewer = state.hasNewer;
 
@@ -102,28 +98,10 @@ class UpdatePage extends ConsumerWidget {
                       ),
                     )
                   else if (state.error != null)
-                    AppCard(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            state.error!,
-                            style: text.bodyMedium?.copyWith(
-                              color: scheme.onSurface.withValues(alpha: 0.8),
-                            ),
-                          ),
-                          const SizedBox(height: AppSpacing.tight),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: TextButton(
-                              onPressed: () => ref
-                                  .read(updateStateProvider.notifier)
-                                  .checkNow(),
-                              child: const Text('重试'),
-                            ),
-                          ),
-                        ],
-                      ),
+                    _HintCard(
+                      message: state.error!,
+                      actionLabel: '重试',
+                      onAction: notifier.checkNow,
                     )
                   else if (!hasNewer)
                     const AppCard(child: Text('已是最新')),
@@ -172,19 +150,77 @@ class UpdatePage extends ConsumerWidget {
                     ),
                   ],
 
+                  // ---- 下载中 ----
+                  if (state.downloading) ...<Widget>[
+                    const SizedBox(height: AppSpacing.section),
+                    AppCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            '正在下载… ${(state.progress! * 100).round()}%',
+                            style: text.bodyMedium,
+                          ),
+                          const SizedBox(height: AppSpacing.tight),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(999),
+                            child: LinearProgressIndicator(
+                              value: state.progress,
+                              minHeight: 6,
+                            ),
+                          ),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: notifier.cancelDownload,
+                              child: const Text('取消'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  // ---- 下载失败 ----
+                  if (state.downloadError != null) ...<Widget>[
+                    const SizedBox(height: AppSpacing.section),
+                    _HintCard(
+                      message: state.downloadError!,
+                      actionLabel: '重试',
+                      onAction: notifier.startDownload,
+                    ),
+                  ],
+
+                  // ---- 安装提示（缺权限 / 装不了）----
+                  if (state.installHint != null) ...<Widget>[
+                    const SizedBox(height: AppSpacing.section),
+                    _HintCard(
+                      message: state.installHint!,
+                      actionLabel: state.needsInstallPermission ? '去设置允许' : null,
+                      onAction: state.needsInstallPermission
+                          ? notifier.openInstallPermissionSettings
+                          : null,
+                    ),
+                  ],
+
                   const SizedBox(height: AppSpacing.section),
-                  FilledButton(
-                    onPressed: (hasNewer && onUpdate != null)
-                        ? () => onUpdate!()
-                        : null,
-                    child: const Text('立即更新'),
-                  ),
+                  // 下载中不显示主按钮：那会儿唯一该做的是「取消」（在上面那张卡里）
+                  if (!state.downloading)
+                    if (state.downloadedPath != null)
+                      FilledButton(
+                        onPressed: notifier.installDownloaded,
+                        child: const Text('安装'),
+                      )
+                    else
+                      FilledButton(
+                        onPressed: hasNewer ? notifier.startDownload : null,
+                        child: const Text('立即更新'),
+                      ),
                   const SizedBox(height: AppSpacing.tight),
                   Align(
                     alignment: Alignment.center,
                     child: TextButton(
-                      onPressed: () =>
-                          ref.read(updateStateProvider.notifier).checkNow(),
+                      onPressed: notifier.checkNow,
                       child: const Text('重新检查'),
                     ),
                   ),
@@ -192,9 +228,7 @@ class UpdatePage extends ConsumerWidget {
                     Align(
                       alignment: Alignment.center,
                       child: TextButton(
-                        onPressed: onOpenPage == null
-                            ? null
-                            : () => onOpenPage!(remote!.downloadPage!),
+                        onPressed: notifier.openDownloadPage,
                         child: const Text('打开发布页'),
                       ),
                     ),
@@ -210,6 +244,49 @@ class UpdatePage extends ConsumerWidget {
   static String _formatTime(DateTime t) {
     String two(int n) => n.toString().padLeft(2, '0');
     return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  }
+}
+
+/// 一行提示 + 一个可选的动作按钮（检查失败 / 下载失败 / 安装提示共用）
+class _HintCard extends StatelessWidget {
+  const _HintCard({
+    required this.message,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final TextTheme text = Theme.of(context).textTheme;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            message,
+            style: text.bodyMedium?.copyWith(
+              color: scheme.onSurface.withValues(alpha: 0.8),
+            ),
+          ),
+          if (actionLabel != null && onAction != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.tight),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: onAction,
+                child: Text(actionLabel!),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 

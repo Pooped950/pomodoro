@@ -198,6 +198,10 @@ class MainActivity : FlutterActivity() {
                     val path = (call.arguments as? Map<*, *>)?.get("path") as? String
                     result.success(installApk(path))
                 }
+                "openUrl" -> {
+                    val url = (call.arguments as? Map<*, *>)?.get("url") as? String
+                    result.success(openUrl(url))
+                }
                 else -> result.notImplemented()
             }
         }
@@ -259,6 +263,20 @@ class MainActivity : FlutterActivity() {
         keepAliveChannel = null
         installerChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    /** 用浏览器打开链接（只接受 https：链接来自远端版本文件） */
+    private fun openUrl(url: String?): Boolean {
+        if (url.isNullOrBlank() || !url.startsWith("https://")) return false
+        return try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     // ------------------------------------------------------------------

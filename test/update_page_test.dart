@@ -7,8 +7,11 @@ import 'package:pomodoro/domain/update/update_info.dart';
 import 'package:pomodoro/presentation/pages/update/update_page.dart';
 import 'package:pomodoro/presentation/providers/update_provider.dart';
 
-/// 「检查更新」页的四种状态 —— 这是用户唯一会盯着的界面，
+import 'support/update_fakes.dart';
+
+/// 「检查更新」页的四种**检查**状态 —— 这是用户唯一会盯着的界面，
 /// 状态和文案错一个他就要来问"到底有没有新版"。
+/// （下载/安装那一段在 `update_page_download_test.dart`）
 void main() {
   final String sha = List<String>.filled(64, 'd').join();
 
@@ -30,15 +33,14 @@ void main() {
   Future<void> pump(
     WidgetTester tester,
     UpdateState state, {
-    Future<void> Function()? onUpdate,
     bool settle = true,
   }) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          updateStateProvider.overrideWith(() => _FakeUpdateNotifier(state)),
+          updateStateProvider.overrideWith(() => FakeUpdateNotifier(state)),
         ],
-        child: MaterialApp(home: UpdatePage(onUpdate: onUpdate)),
+        child: const MaterialApp(home: UpdatePage()),
       ),
     );
     // 「检查中」有个不停转的圈：pumpAndSettle 永远等不到静止
@@ -63,7 +65,6 @@ void main() {
         checkedAt: DateTime(2026, 10, 7, 18),
         action: UpdateAction.none,
       ),
-      onUpdate: () async {},
     );
 
     expect(find.text('已是最新'), findsOneWidget);
@@ -75,8 +76,6 @@ void main() {
 
   testWidgets('有新版本 → 显示远端版本号 + 更新说明每一条，按钮可点',
       (WidgetTester tester) async {
-    bool tapped = false;
-
     await pump(
       tester,
       UpdateState(
@@ -87,16 +86,16 @@ void main() {
         checkedAt: DateTime(2026, 10, 7, 18),
         action: UpdateAction.showPrompt,
       ),
-      onUpdate: () async => tapped = true,
     );
 
     expect(find.textContaining('9.9.9'), findsWidgets);
     expect(find.text('甲：课表更准了'), findsOneWidget);
     expect(find.text('乙：多了三点点菜单'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(FilledButton, '立即更新'));
-    await tester.pumpAndSettle();
-    expect(tapped, isTrue);
+    final FilledButton button = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, '立即更新'),
+    );
+    expect(button.onPressed, isNotNull);
   });
 
   testWidgets('检查失败 → 页内提示 + 重试按钮（不是弹窗）', (WidgetTester tester) async {
@@ -124,20 +123,4 @@ void main() {
 
     expect(find.text('打开发布页'), findsNothing);
   });
-}
-
-/// 固定状态的假 notifier：界面测试只关心"给这个状态画出什么"
-class _FakeUpdateNotifier extends UpdateNotifier {
-  _FakeUpdateNotifier(this._state);
-
-  final UpdateState _state;
-
-  @override
-  UpdateState build() => _state;
-
-  @override
-  Future<void> checkNow() async {}
-
-  @override
-  Future<void> checkIfStale() async {}
 }
