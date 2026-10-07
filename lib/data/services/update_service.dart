@@ -5,14 +5,17 @@ import 'package:http/http.dart' as http;
 import '../../domain/update/update_info.dart';
 import '../repositories/settings_repository.dart';
 
-/// Gitee 分发仓的 owner —— 用户注册后回填（Task 0 确认）。
-///
-/// 单测全部自己传 `endpoint`，不依赖这个值，所以它写错不会让测试变绿。
-const String kGiteeOwner = 'pooped950';
+/// Gitee 分发仓的 owner / 仓库名（2026-10-07 用户建好了公开仓 `pomodoro-dist`）。
+const String kGiteeOwner = 'Pooped950';
+const String kGiteeRepo = 'pomodoro-dist';
 
-/// 远端版本文件的地址（Gitee 公开仓的 raw 链接：国内直连、不需要登录/令牌）。
+/// 远端版本文件的地址。
+///
+/// 两个要点（都是踩过的）：
+///   - Gitee 的**默认分支是 `master`**，不是 GitHub 那种 `main` —— 写错就是 404
+///   - 这个 raw 链接是**匿名可读**的（不需要登录、不需要令牌），实测过
 const String kUpdateEndpoint =
-    'https://gitee.com/$kGiteeOwner/pomodoro-dist/raw/main/version.json';
+    'https://gitee.com/$kGiteeOwner/$kGiteeRepo/raw/master/version.json';
 
 /// 拿一段文本回来；失败返回 null（实现里不要抛给调用方）
 typedef UpdateFetcher = Future<String?> Function(String url);
