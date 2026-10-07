@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/app_info.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/theme/motion_tokens.dart';
 import '../../widgets/glass_primary_button.dart';
@@ -163,7 +164,7 @@ class _ManualContentState extends State<ManualContent> {
               ),
             ),
             Text(
-              'v$kManualVersion',
+              'v$kAppVersion',
               style: text.bodySmall?.copyWith(
                 color: scheme.onSurface.withValues(alpha: 0.45),
               ),

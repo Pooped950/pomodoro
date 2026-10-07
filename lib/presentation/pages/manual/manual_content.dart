@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
 
-/// 使用手册的**版本号**。
+import '../../../core/app_info.dart';
+import 'update_dialog.dart';
+
+/// 使用手册的**内容版本** —— 只管"弹不弹"，**不是显示给用户的版本号**。
 ///
 /// ## 这个数字是"弹不弹"的开关
 ///
 /// 用户看过的手册版本存在 `settings` 里。每次启动比对：
 ///   - 存的和 [kManualVersion] **一样** → 不再弹
-///   - 不一样（首次安装、或者版本升了）→ 再弹一次
+///   - 不一样（首次安装、或者手册内容改版了）→ 再弹一次
 ///
-/// 所以**每次发版要记得改这里**，并把 [kReleaseNotes] 换成这一版的新内容 ——
-/// 这样老用户升级后会自动看到"这次更新了什么"，不用另做一套更新日志页。
-///
-/// 只改文案、不改功能的小版本可以不升这个号（免得天天弹）。
+/// ⚠️ 2026-10-07 起**显示**的版本走 [kAppVersion]（手册弹窗右上角 + 最后一页标题）：
+/// 大版本的"这次更新了什么"由启动时的大版本更新弹窗负责（见 `update_dialog.dart`），
+/// 手册不必每次发版都跟着重弹一遍。所以这个号**只在手册结构 / 正文改版时才升**
+/// （升了老用户会再看一次手册）。
+/// 早先把这里当版本号显示，结果 2.x 的 App 里手册写着 `v1.9.0`。
 const String kManualVersion = '1.9.0';
 
 /// 手册里的一页
@@ -38,15 +42,11 @@ class ManualPage {
   final Color? tint;
 }
 
-/// 本次版本的更新内容（手册最后一页）
+/// 手册最后一页「更新内容」要列的东西。
 ///
-/// ⚠️ 发版时和 [kManualVersion] 一起改。
-const List<String> kReleaseNotes = <String>[
-  '「任务」和「统计」合并成一页，顶部两个小标签切换，底部导航腾出一格给课表',
-  '新增「课表」页：截两张课表截图，自动拼成一张完整的，本机离线识别，'
-      '逐格核对之后再存进手机',
-  '新增这份使用手册 —— 首次打开自动出现，之后可以在「我的」里随时翻',
-];
+/// 直接复用大版本更新弹窗那份文案（[kMajorUpdateNotes]）—— 两处说的是同一件事
+/// （"这次更新你得到了什么"），抄成两份迟早会漂移。
+const List<String> kReleaseNotes = kMajorUpdateNotes;
 
 /// 手册的全部页面。顺序就是滑动的顺序。
 final List<ManualPage> kManualPages = <ManualPage>[
@@ -124,10 +124,12 @@ final List<ManualPage> kManualPages = <ManualPage>[
 ];
 
 /// 最后一页：本次更新。单独生成，方便 [kReleaseNotes] 直接改。
+///
+/// 标题跟 [kAppVersion] 走（**不是** [kManualVersion]，那个只管弹不弹）。
 ManualPage releaseNotesPage() => ManualPage(
       icon: Icons.auto_awesome_outlined,
-      title: 'v$kManualVersion 更新内容',
-      body: '这一版主要动了导航结构和课表。',
+      title: 'v$kAppVersion 更新内容',
+      body: '这一版主要动了课表 —— 能导入、能改、能删。',
       bullets: kReleaseNotes,
     );
 

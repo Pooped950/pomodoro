@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pomodoro/core/app_info.dart';
 import 'package:pomodoro/presentation/pages/manual/manual_content.dart';
 import 'package:pomodoro/presentation/pages/manual/manual_dialog.dart';
 
@@ -22,7 +23,7 @@ void main() {
 
     // 标题（首启文案）
     expect(find.text('欢迎使用'), findsOneWidget);
-    expect(find.text('v$kManualVersion'), findsOneWidget);
+    expect(find.text('v$kAppVersion'), findsOneWidget);
 
     // 第一页的内容
     expect(find.text('一颗番茄'), findsOneWidget);
