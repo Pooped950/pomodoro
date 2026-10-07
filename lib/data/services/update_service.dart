@@ -78,14 +78,18 @@ class UpdateService {
   }
 
   /// 从设置里把上次的缓存读进内存。App 启动时调一次即可。
+  ///
+  /// ⚠️ 用 `??=` 而不是直接赋值：预热是异步的，可能和一次刚落地的 [check]
+  /// 赛跑 —— 内存里已经有**更新**的数据时，不能被库里那份旧的覆盖回去
+  /// （2026-10-07 单测抓到：预热后 lastCheckAt 被冲回 null）。
   Future<void> warmUp() async {
     try {
       final String? raw =
           await store.read(SettingsRepository.keyUpdateCachedJson);
-      _cached = UpdateInfo.tryParse(raw);
+      _cached ??= UpdateInfo.tryParse(raw);
       final String? at =
           await store.read(SettingsRepository.keyUpdateLastCheckAt);
-      _lastCheckAt = at == null ? null : DateTime.tryParse(at);
+      _lastCheckAt ??= at == null ? null : DateTime.tryParse(at);
     } catch (_) {
       // 读缓存失败也要能用（当作没有缓存）
     }
