@@ -8,9 +8,14 @@ import '../../../core/app_info.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/theme/motion_tokens.dart';
 import '../../../data/repositories/settings_repository.dart';
+import '../../../domain/update/startup_dialogs.dart';
+import '../../../domain/update/update_decision.dart';
+import '../../../domain/update/update_info.dart';
 import '../../providers/stats_provider.dart';
 import '../../providers/task_provider.dart';
+import '../../providers/update_provider.dart';
 import '../../widgets/ambient_background.dart';
+import '../../widgets/app_page_route.dart';
 import '../../widgets/floating_nav_bar.dart';
 import '../../widgets/motion_scope.dart';
 import '../home/home_page.dart';
@@ -20,6 +25,7 @@ import '../manual/manual_dialog.dart';
 import '../profile/profile_page.dart';
 import '../taskstats/task_stats_page.dart';
 import '../timetable/timetable_page.dart';
+import '../update/update_page.dart';
 
 /// 应用外壳：环境色背景 + 可滑动页面 + 悬浮导航条。
 ///
@@ -100,79 +106,83 @@ class _AppShellState extends ConsumerState<AppShell> {
         .addPostFrameCallback((_) => _maybeShowStartupDialogs());
   }
 
-  /// 首次打开（或者手册版本升了）时弹一次使用手册。
+  /// 启动时要弹的窗：**远端更新说明 → 本地大版本兜底 → 首次手册**。
   ///
-  /// 为什么放在外壳而不是 `HomePage` 里：手册讲的是**整个 App**，
-  /// 不是计时页一个页面；而且外壳能保证不管用户从哪一格进来都只弹一次。
+  /// 取舍与顺序交给纯函数 [planStartupDialogs]（可单测），这里只负责执行：
+  ///   - 先**静默**检查一次远端版本（有 10 分钟节流；失败静默，绝不打扰）
+  ///   - 远端要求提示就弹远端那份，本地兜底让位（否则用户连看两个几乎一样的窗）
+  ///   - 手册永远最后弹：先讲"变了什么"，再教"怎么用"
   ///
-  /// 弹过就立刻记下版本 —— 用户是滑完还是点「跳过」都算"看过了"，
-  /// 不该下次启动再弹一次烦他。
-  /// 启动时的两类弹窗，**更新说明在手册之前判**：
-  /// 全新安装（没看过手册）只弹手册不弹更新，判定要用"看没看过手册"，
-  /// 所以必须抢在手册把"看过"写进设置之前。
+  /// ⚠️ 「全新安装」的判据是"手册还没弹过"，所以两个键都要在动手之前读完。
   Future<void> _maybeShowStartupDialogs() async {
-    await _maybeShowUpdateDialog();
-    await _maybeShowManual();
-  }
+    await ref.read(updateStateProvider.notifier).checkIfStale();
+    if (!mounted) return;
 
-  /// 大版本升级后的老用户：弹一次「vX 更新了什么」。
-  /// 全新安装不弹（手册已经把一切讲了一遍），看过这个大版本就不再弹。
-  Future<void> _maybeShowUpdateDialog() async {
-    final SettingsRepository settings =
-        ref.read(settingsRepositoryProvider);
-    // ⚠️ 顺序不能反：全新安装的判据是「手册还没弹过」，所以要抢在
-    // _maybeShowManual 把 manualSeen 写进设置之前读（见 _maybeShowStartupDialogs）
+    final SettingsRepository settings = ref.read(settingsRepositoryProvider);
     final String? manualSeen =
         await settings.readString(SettingsRepository.keyManualSeenVersion);
     final String? seen =
         await settings.readString(SettingsRepository.keyUpdateSeenVersion);
 
-    if (!shouldShowMajorUpdateDialog(
+    final bool localMajorDue = shouldShowMajorUpdateDialog(
       isFreshInstall: manualSeen == null,
       seenVersion: seen,
       currentVersion: kAppVersion,
-    )) {
-      // 全新安装、或者本地是脏数据：把当前版本记下来，
-      // 免得下次被当成"这个键不存在"而误弹
-      if (seen != kAppVersion && (seen == null || majorVersionOf(seen) == null)) {
-        await settings.writeString(
-            SettingsRepository.keyUpdateSeenVersion, kAppVersion);
-      }
-      return;
-    }
-    if (kDebugMode) {
-      debugPrint('[UPDATE] 大版本升级（见过 ${seen ?? '键不存在'} → $kAppVersion）弹更新说明');
-    }
-    if (!mounted) return;
-    await showUpdateDialog(context);
-    await settings.writeString(
-      SettingsRepository.keyUpdateSeenVersion,
-      kAppVersion,
     );
+
+    final UpdateState state = ref.read(updateStateProvider);
+    final List<StartupDialog> plan = planStartupDialogs(
+      remoteAction: state.action,
+      localMajorDue: localMajorDue,
+      manualDue: manualSeen != kManualVersion,
+    );
+    if (kDebugMode) {
+      debugPrint('[STARTUP] 计划=$plan（远端=${state.action} '
+          '本地major=$localMajorDue 手册=${manualSeen ?? '(没看过)'}）');
+    }
+
+    for (final StartupDialog dialog in plan) {
+      if (!mounted) return;
+      switch (dialog) {
+        case StartupDialog.remoteUpdate:
+          await _showRemoteUpdateDialog(state);
+        case StartupDialog.localMajorUpdate:
+          await showUpdateDialog(context);
+          await settings.writeString(
+              SettingsRepository.keyUpdateSeenVersion, kAppVersion);
+        case StartupDialog.manual:
+          await showManualDialog(context, isFirstLaunch: true);
+          await settings.writeString(
+              SettingsRepository.keyManualSeenVersion, kManualVersion);
+      }
+    }
+
+    // 全新安装 / 本地是脏数据：把当前版本记一笔，免得下次被当成
+    // "这个键不存在"而误弹（远端那份弹过也会自己记）
+    if (seen != kAppVersion && (seen == null || majorVersionOf(seen) == null)) {
+      await settings.writeString(
+          SettingsRepository.keyUpdateSeenVersion, kAppVersion);
+    }
   }
 
-  Future<void> _maybeShowManual() async {
-    final SettingsRepository settings =
-        ref.read(settingsRepositoryProvider);
-    final String? seen =
-        await settings.readString(SettingsRepository.keyManualSeenVersion);
+  /// 远端驱动的那份更新说明：`prompt` 可关、`force` 关不掉
+  Future<void> _showRemoteUpdateDialog(UpdateState state) async {
+    final UpdateInfo? remote = state.remote;
+    if (remote == null) return;
+    final bool force = state.action == UpdateAction.forceUpdate;
 
-    // debug 构建下打一行：排查"手册该弹却没弹"时，一眼看出是版本对上了
-    // 还是别的原因（release 不输出）
-    if (kDebugMode) {
-      debugPrint('[MANUAL] 已看过=${seen ?? '(没看过)'} '
-          '当前=$kManualVersion → '
-          '${seen == kManualVersion ? '不弹' : '弹'}');
-    }
-
-    if (seen == kManualVersion) return;
-    if (!mounted) return;
-
-    await showManualDialog(context, isFirstLaunch: true);
-    await settings.writeString(
-      SettingsRepository.keyManualSeenVersion,
-      kManualVersion,
+    await showUpdateDialog(
+      context,
+      version: remote.versionName,
+      notes: remote.notes.isEmpty ? null : remote.notes,
+      force: force,
+      onUpdate: force ? () => pushAppPage(context, const UpdatePage()) : null,
     );
+
+    // prompt 档：记下"这个版本弹过了"，同一个版本不再弹
+    if (!force) {
+      await ref.read(updateStateProvider.notifier).markPrompted();
+    }
   }
 
   @override

@@ -91,4 +91,90 @@ void main() {
       expect(find.text('v$kAppVersion 更新了什么'), findsNothing);
     });
   });
+
+  group('远端驱动的更新说明弹窗', () {
+    Future<void> open(
+      WidgetTester tester, {
+      String? version,
+      List<String>? notes,
+      bool force = false,
+      VoidCallback? onUpdate,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (BuildContext ctx) => FilledButton(
+                onPressed: () => showUpdateDialog(
+                  ctx,
+                  version: version,
+                  notes: notes,
+                  force: force,
+                  onUpdate: onUpdate,
+                ),
+                child: const Text('打开'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('传了远端 notes → 显示远端文案，不再显示本地常量', (WidgetTester tester) async {
+      await open(
+        tester,
+        version: '9.9.9',
+        notes: <String>['远端甲：识别更准', '远端乙：能加课'],
+      );
+
+      expect(find.text('v9.9.9 更新了什么'), findsOneWidget);
+      expect(find.text('远端甲：识别更准'), findsOneWidget);
+      expect(find.text('远端乙：能加课'), findsOneWidget);
+      expect(find.textContaining(kMajorUpdateNotes.first.substring(0, 8)),
+          findsNothing);
+    });
+
+    testWidgets('force: false → 点遮罩能关掉（和以前一样）', (WidgetTester tester) async {
+      await open(tester, notes: <String>['随便一条']);
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      expect(find.text('v$kAppVersion 更新了什么'), findsNothing);
+    });
+
+    testWidgets('★ force: true → 点遮罩关不掉、返回键也被挡住，且没有「开始使用」',
+        (WidgetTester tester) async {
+      bool updated = false;
+      await open(
+        tester,
+        notes: <String>['必须更新的一版'],
+        force: true,
+        onUpdate: () => updated = true,
+      );
+
+      // 遮罩点不掉
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+      expect(find.text('v$kAppVersion 更新了什么'), findsOneWidget);
+
+      // 系统返回键也被 PopScope 挡住
+      expect(
+        tester
+            .widgetList<PopScope>(find.byType(PopScope))
+            .any((PopScope p) => p.canPop == false),
+        isTrue,
+        reason: 'force 档要禁止返回',
+      );
+
+      // 只能「立即更新」或「退出」
+      expect(find.text('开始使用'), findsNothing);
+      expect(find.text('退出'), findsOneWidget);
+      await tester.tap(find.text('立即更新'));
+      await tester.pumpAndSettle();
+      expect(updated, isTrue);
+    });
+  });
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../core/app_info.dart';
 import '../../../core/theme/design_tokens.dart';
@@ -54,16 +55,27 @@ const List<String> kMajorUpdateNotes = <String>[
   '时间排不下会当场提醒，上午/下午的节数可以自己改',
 ];
 
-/// 大版本更新弹窗 —— 升级后**首次启动**弹一次，居中玻璃卡。
+/// 更新说明弹窗。
 ///
-/// 和首启手册同一个视觉语言（居中 + 玻璃 + 中心缩放），但只有一页：
-/// 大版本更新是"告诉你得到了什么"，不是"教你用"，不该把整本手册再弹一遍。
-Future<void> showUpdateDialog(BuildContext context) {
+/// 两种来源、两种分量：
+///   - **本地兜底**：不传参数 —— 用 [kMajorUpdateNotes]，升级后首次启动弹一次（可关）
+///   - **远端驱动**：传 [version] / [notes]（远端 `version.json` 里的原文）。
+///     [force] 为 true 时**关不掉**（遮罩、返回键都无效），只能「立即更新」或「退出」
+///
+/// 视觉语言和首启手册一致（居中 + 玻璃 + 中心缩放），但只有一页：
+/// 更新说明是"告诉你得到了什么"，不是"教你用"。
+Future<void> showUpdateDialog(
+  BuildContext context, {
+  String? version,
+  List<String>? notes,
+  bool force = false,
+  VoidCallback? onUpdate,
+}) {
   final Motion motion = MotionScope.resolve(context);
 
   return showGeneralDialog<void>(
     context: context,
-    barrierDismissible: true,
+    barrierDismissible: !force,
     barrierLabel: '关闭更新说明',
     barrierColor: Colors.black.withValues(alpha: 0.30),
     transitionDuration: motion.pageEnter,
@@ -72,7 +84,12 @@ Future<void> showUpdateDialog(BuildContext context) {
       Animation<double> _,
       Animation<double> _,
     ) =>
-        const UpdateDialogBody(),
+        UpdateDialogBody(
+      version: version,
+      notes: notes,
+      force: force,
+      onUpdate: onUpdate,
+    ),
     transitionBuilder: (
       BuildContext _,
       Animation<double> animation,
@@ -100,14 +117,36 @@ Future<void> showUpdateDialog(BuildContext context) {
 }
 
 class UpdateDialogBody extends StatelessWidget {
-  const UpdateDialogBody({super.key});
+  const UpdateDialogBody({
+    super.key,
+    this.version,
+    this.notes,
+    this.force = false,
+    this.onUpdate,
+  });
+
+  /// 远端版本号（不传就用当前 App 版本）
+  final String? version;
+
+  /// 远端更新说明（不传就用本地常量 [kMajorUpdateNotes]）
+  final List<String>? notes;
+
+  /// 强制更新：关不掉，只能去更新或退出
+  final bool force;
+
+  /// 点「立即更新」干什么（由外壳给：进「检查更新」页）
+  final VoidCallback? onUpdate;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final TextTheme text = Theme.of(context).textTheme;
+    final List<String> bullets = notes ?? kMajorUpdateNotes;
 
-    return Center(
+    return PopScope(
+      // force 档：系统返回键也不能把它关掉
+      canPop: !force,
+      child: Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: AppSpacing.page),
         child: ConstrainedBox(
@@ -136,7 +175,7 @@ class UpdateDialogBody extends StatelessWidget {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'v$kAppVersion 更新了什么',
+                          'v${version ?? kAppVersion} 更新了什么',
                           style: text.titleMedium,
                         ),
                       ),
@@ -148,7 +187,7 @@ class UpdateDialogBody extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
-                          for (final String note in kMajorUpdateNotes)
+                          for (final String note in bullets)
                             Padding(
                               padding:
                                   const EdgeInsets.only(bottom: AppSpacing.tight),
@@ -182,18 +221,37 @@ class UpdateDialogBody extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: AppSpacing.tight),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('开始使用'),
+                  if (force) ...<Widget>[
+                    // 强制档：只能去更新，或者退出 App（不给"以后再说"）
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: onUpdate,
+                        child: const Text('立即更新'),
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: AppSpacing.tight),
+                    Align(
+                      alignment: Alignment.center,
+                      child: TextButton(
+                        onPressed: () => SystemNavigator.pop(),
+                        child: const Text('退出'),
+                      ),
+                    ),
+                  ] else
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('开始使用'),
+                      ),
+                    ),
                 ],
               ),
             ),
           ),
         ),
+      ),
       ),
     );
   }
