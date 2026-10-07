@@ -43,6 +43,8 @@ dependencies:
   # 主页自定义背景：把用户选的照片从"相册临时缓存"复制到应用私有目录。
   # 不复制的话，系统清理缓存后背景图就变成一张白板了。
   path_provider: ^2.1.5
+  # 检查更新：拉远端版本文件（version.json）+ 下载 APK（流式、要进度）
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

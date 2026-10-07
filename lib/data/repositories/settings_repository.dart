@@ -43,6 +43,18 @@ class SettingsRepository {
   /// （小版本/补丁不弹，见 `update_dialog.dart` 的 `shouldShowMajorUpdateDialog`）。
   static const String keyUpdateSeenVersion = 'update_seen_version';
 
+  /// 检查更新：上次**发起检查**的时间（ISO8601）。成功失败都记 ——
+  /// 离线时也要节流，不然用户每进一次「我的」页就打一次网络。
+  static const String keyUpdateLastCheckAt = 'update_last_check_at';
+
+  /// 检查更新：上次**成功**拉到的版本文件原文。
+  /// 存原文而不是解析结果，是为了解析逻辑升级后缓存还能用；离线时也能显示
+  /// "上次看到的最新版本 + 更新说明"。
+  static const String keyUpdateCachedJson = 'update_cached_json';
+
+  /// 检查更新：已经弹过「更新说明」的那个 versionCode（`prompt` 档只弹一次）。
+  static const String keyUpdatePromptedVersionCode = 'update_prompted_version_code';
+
   /// 读一个字符串值；没存过 / 类型不对返回 null
   Future<String?> readString(String key) async {
     final List<Map<String, Object?>> rows = await _db.query(
