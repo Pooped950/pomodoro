@@ -8,7 +8,7 @@ import '../../providers/update_provider.dart';
 import '../../widgets/ambient_background.dart';
 import '../../widgets/app_card.dart';
 
-/// 「检查更新」页 —— 从「我的」最下面那一行进来。
+/// 「检查更新」页 —— 从「关于」页那一行进来。
 ///
 /// ## 为什么是页面而不是弹窗
 ///

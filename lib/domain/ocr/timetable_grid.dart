@@ -29,6 +29,7 @@ library;
 import 'dart:typed_data';
 
 import 'ocr_result.dart';
+import 'ocr_rules.dart';
 import 'timetable_geometry.dart';
 import 'timetable_vocab.dart';
 
@@ -203,6 +204,27 @@ int _denseIndex(String s, int index) {
 bool _looksLikeWeekdayHeader(String raw) =>
     _weekdayLeadPattern.hasMatch(_stripLeadNoise(raw));
 
+/// 行首的「上课时刻」：`08:00-08:50` / `08:00~08:50`，全角冒号也认。
+final RegExp _leadClockPattern =
+    RegExp(r'^\s*\d{1,2}\s*[:：]\s*\d{2}\s*[-~—－]\s*\d{1,2}\s*[:：]\s*\d{2}\s*');
+
+/// 剥掉行首的上课时刻（没有就原样返回）。
+String _stripLeadClock(String s) => s.replaceFirst(_leadClockPattern, '');
+
+/// 一段文字的**显示宽度**：汉字/全角算 1，其余（数字、冒号、连字符）算半宽。
+///
+/// 用来把「行首时刻」折算成 x 偏移。⚠️ 不能按字符数比例算：
+/// 时刻里全是窄字符，按字符算会把偏移估大一倍 —— 实测
+/// `10:10-11:00 层次) 语-读`（框 x=20..334）按字符算偏移 203px、
+/// 按宽度算 164px，而真实内容是从约 170px 开始的。
+double _wideUnits(String s) {
+  double u = 0;
+  for (final int r in s.runes) {
+    u += r >= 0x2E80 ? 1.0 : 0.5;
+  }
+  return u;
+}
+
 /// 解析入口。规则见文件头注释。
 ///
 /// [pixels] 是拼图的原始像素（RGBA），能传就走**像素路线**：
@@ -217,6 +239,14 @@ ParsedTimetable parseTimetable(
 
   final List<OcrBlock> sorted = List<OcrBlock>.of(blocks)
     ..sort((OcrBlock a, OcrBlock b) => a.top.compareTo(b.top));
+
+  // 块高与最大 y —— 表头扫描、锚点恢复、像素几何都要用，提到最前面只算一次
+  final double maxY = sorted
+      .map((OcrBlock b) => b.bottom)
+      .reduce((double a, double b) => a > b ? a : b);
+  final List<double> heights =
+      sorted.map((OcrBlock b) => b.height).toList()..sort();
+  final double medianHeight = heights[heights.length ~/ 2];
 
   // ---- 1. 星期表头行：以「周X」开头的行（可能多行、可能合并） ----
   final List<_HeaderPart> headerParts = <_HeaderPart>[];
@@ -256,6 +286,26 @@ ParsedTimetable parseTimetable(
   final Map<int, _HeaderPart> byWeekday = <int, _HeaderPart>{};
   for (final _HeaderPart h in headerParts) {
     byWeekday.putIfAbsent(h.weekday, () => h);
+  }
+  if (byWeekday.length < kMinWeekdayColumns) {
+    // ---- 1b. 裸表头兜底（2026-10-07 新增，另一款校园 App 实测）----
+    //
+    // 有些 App 的表头写的是**裸的「一 二 三 四 五 六 日」**（没有「周」字），
+    // 上面的 `^周X` 锚定一个都匹配不上。更糟的是 ML Kit 会把「一」「二」
+    // **整块漏读**（细横线字形），只认得出 `三四`（还粘成一行）、`五`、`六`、`日m`。
+    //
+    // 所以拿**日期行**（`11/2 11/3 …`，7 个都在、间距就是列距）当位置来源，
+    // 拿认得出的那几个标签当**身份锚点**，两边一配就把 7 列补齐。
+    final _BareHeaderScan? bare =
+        _bareHeaderScan(sorted, maxY, medianHeight);
+    if (bare != null) {
+      for (final _HeaderPart h in bare.columns) {
+        byWeekday.putIfAbsent(h.weekday, () => h);
+      }
+      // ⚠️ 只把**真正的表头标签**加进 headerParts —— 日期行推导出来的那些
+      // 带的是日期行的上下沿，加进来会把"表头以上不算网格"这条判断往下挪。
+      headerParts.addAll(bare.labelParts);
+    }
   }
   if (byWeekday.length < kMinWeekdayColumns) {
     throw const TimetableParseException('没找到星期表头（周一～周日），'
@@ -307,8 +357,19 @@ ParsedTimetable parseTimetable(
       .map((_HeaderPart h) => h.top)
       .reduce((double a, double b) => a < b ? a : b);
 
-  // ---- 2. 日期行：表头正下方、`M-D` 形态 ----
-  final RegExp datePattern = RegExp(r'^\d{1,2}-\d{1,2}$');
+  // ---- 2. 日期行：表头正下方、`M-D` / `M/D` 形态 ----
+  //
+  // ⚠️ 斜杠也要认（2026-10-07 真机实测）：另一款 App 写的是 `11/2`，
+  // 只认 `-` 的话这一整行既进不了列、也定不出 `dateRowBottom`，
+  // 后果是**日期文本被当成课程内容塞进格子里**（课名变成 `11/4高等数学A()上`）。
+  //
+  // ⚠️ 还要认**光秃秃的日号**（2026-10-08 真机实测）：这个 App 的日期行
+  // 写的是 `5` `6` `7` …（不带月份），一个都不匹配 → `dateRowBottom`
+  // 停在表头下沿 → 日期被当成课程内容，课名变成 `5排球初`、`7微积枳分`。
+  final RegExp datePattern = RegExp(r'^\d{1,2}[/\-]\d{1,2}$');
+  final RegExp dayOnlyPattern = RegExp(r'^\d{1,2}$');
+  bool looksLikeDateToken(String s) =>
+      datePattern.hasMatch(s) || dayOnlyPattern.hasMatch(s);
   double dateRowBottom = headerBottom;
   for (final OcrBlock b in sorted) {
     if (b.top < headerBottom || b.top > headerBottom + 80) continue;
@@ -317,7 +378,13 @@ ParsedTimetable parseTimetable(
         .split(RegExp(r'\s+'))
         .where((String s) => s.isNotEmpty)
         .toList();
-    if (tokens.isEmpty || !tokens.every(datePattern.hasMatch)) continue;
+    if (tokens.isEmpty || !tokens.every(looksLikeDateToken)) continue;
+    // 光秃秃的日号只认**课程区**里的（节次栏的 `1`/`2` 也是裸数字，
+    // 虽然它在表头下面，但那是节次号不是日期）
+    if (!tokens.any(datePattern.hasMatch) &&
+        b.centerX < columns.first.left) {
+      continue;
+    }
     final double slot = b.width / tokens.length;
     for (int i = 0; i < tokens.length; i++) {
       final double tokenCx = b.left + slot * (i + 0.5);
@@ -342,15 +409,8 @@ ParsedTimetable parseTimetable(
       _recoverAnchors(sorted, columns.first.left);
 
   // ---- 4. 分流：像素路线 / 纯文字路线 ----
-  final double maxY = sorted
-      .map((OcrBlock b) => b.bottom)
-      .reduce((double a, double b) => a > b ? a : b);
-  final List<double> heights =
-      sorted.map((OcrBlock b) => b.height).toList()..sort();
-  final double medianHeight = heights[heights.length ~/ 2];
-
   if (pixels != null) {
-    final TimetableGeometry? geometry = TimetableGeometryScanner.analyze(
+    final TimetableGeometry? rawGeometry = TimetableGeometryScanner.analyze(
       width: pixels.width,
       height: pixels.height,
       rgba: pixels.rgba,
@@ -361,6 +421,12 @@ ParsedTimetable parseTimetable(
       gutterRight: columns.first.left,
       yTop: dateRowBottom + 2,
       yBottom: maxY - medianHeight * 1.2,
+    );
+    // 像素扫描会在表头/日期行附近**多认出一行**，也会把课程文字的左边缘
+    // 误当节次行、把真节次行粘连后丢掉（详见 snapToAnchors 的注释）。
+    // OCR 的节次栏是印在图上的数字，按它校正。
+    final TimetableGeometry? geometry = rawGeometry?.snapToAnchors(
+      anchors.map((PeriodAnchor a) => a.centerY).toList(),
     );
     // 像素量出的节次行必须和 OCR 认出的节次栏对得上，才可信：
     // 每个 OCR 锚点附近都应该有一个像素标签。对不上说明这张图的
@@ -428,13 +494,20 @@ class TimetablePixels {
 /// 2. 相邻锚点的间距 ≈ 整数倍中位间距时，中间补**幽灵锚点**（漏读的节）
 /// 3. 最后按位置重新编号 1..n（拼图永远从第 1 节开始，表头是固定的）
 List<PeriodAnchor> _recoverAnchors(List<OcrBlock> sorted, double firstColumnLeft) {
-  final RegExp numberPattern = RegExp(r'^\d{1,2}$');
+  // ⚠️ 节次栏有**两种写法**，都要认（2026-10-07 真机实测）：
+  //   - 裸数字：`1` `2` … `13`（第一款 App）
+  //   - `第N节`：`第1节` `第12节`（另一款 App）—— 只认裸数字的话这里
+  //     一个锚点都收不到（实测 0 个），节次范围全乱、整列课挤成一格
+  final RegExp numberPattern = RegExp(r'^(?:第)?\s*(\d{1,2})\s*(?:节)?$');
   final List<_PeriodAnchor> raw = <_PeriodAnchor>[];
   for (final OcrBlock b in sorted) {
     final String t = b.text.trim();
-    if (!numberPattern.hasMatch(t)) continue;
+    final RegExpMatch? m = numberPattern.firstMatch(t);
+    if (m == null) continue;
+    final int? p = int.tryParse(m.group(1)!);
+    if (p == null || p < 1 || p > 30) continue;
     if (b.centerX >= firstColumnLeft) continue; // 课程区里的纯数字是噪声
-    raw.add(_PeriodAnchor(period: int.parse(t), centerY: b.centerY));
+    raw.add(_PeriodAnchor(period: p, centerY: b.centerY));
   }
   if (raw.isEmpty) return const <PeriodAnchor>[];
 
@@ -521,7 +594,7 @@ ParsedTimetable _parseWithGeometry({
   final double pitch = geometry.medianPitch;
 
   // ---- 1. 像素块 → 格子骨架（列 + 节次跨度） ----
-  final List<_GeoCell> cells = <_GeoCell>[];
+  List<_GeoCell> cells = <_GeoCell>[];
   for (final GeometryBlock gb in geometry.blocks) {
     final WeekdayColumn? col = _columnAt(columns, gb.centerX);
     if (col == null) continue;
@@ -532,6 +605,7 @@ ParsedTimetable _parseWithGeometry({
       bottom: gb.bottom,
       startPeriod: periods.first,
       endPeriod: periods.last,
+      colorEdges: gb.colorEdges,
     ));
   }
   cells.sort((_GeoCell a, _GeoCell b) {
@@ -543,11 +617,15 @@ ParsedTimetable _parseWithGeometry({
   // ---- 2. 第一轮词表：不跨列的行先归格，用强规则粗拆课名/教室 ----
   final Map<_GeoCell, List<String>> assigned =
       <_GeoCell, List<String>>{};
+  // 每个格收到的文字行的 y 跨度 + 文本 —— 只给第一轮用，
+  // 用来判断"这一块里到底挤了几门课"（见 _splitCellsByTextGaps）
+  final Map<_GeoCell, List<(double, double, String)>> lineSpans =
+      <_GeoCell, List<(double, double, String)>>{};
   final List<String> dropped = <String>[];
   // 收到过「未拆整条跨列行」的那些**行**：内容是几列粘一起的，粗拆结果
   // 不可信，不进词表（不然 `云506教室` 这种粘出来的假词会污染修正）。
   // ⚠️ 按行记不按格记：一个脏格里的其他行往往还是干净的
-  // （2026-10-07 踩过：按格排除把 `洲云杉楼` 踢出了词表，DP 切点跟着歪）
+  // （2026-10-07 踩过：按格排除把 `洲梧桐楼` 踢出了词表，DP 切点跟着歪）
   final Set<String> dirtyLines = <String>{};
   _assignAtoms(
     sorted: sorted,
@@ -568,6 +646,32 @@ ParsedTimetable _parseWithGeometry({
   final TimetableVocab rough = _buildVocab(assigned, dirtyLines);
 
   // ---- 3. 第二轮：带上词表重拆跨列行、重归格 ----
+  //
+  // ⚠️ 这一轮的 `lineSpans` 才是**可信的**：跨列粘连行拆开之后，
+  // 每一列才拿到属于自己的那几行（第一轮没词表、拆不了，整条长行
+  // 按中心归给中间那一列，导致周一少了 3 行文字、切点算偏）。
+  assigned.clear();
+  dropped.clear();
+  _assignAtoms(
+    sorted: sorted,
+    columns: columns,
+    cells: cells,
+    assigned: assigned,
+    dropped: dropped,
+    vocab: rough,
+    headerTop: headerTop,
+    headerBottom: headerBottom,
+    dateRowBottom: dateRowBottom,
+    maxY: maxY,
+    medianHeight: medianHeight,
+    pitch: pitch,
+    lineSpans: lineSpans,
+  );
+
+  // ---- 3b. 块内按文字纵向间隙切分（相邻课程块可以紧挨着没有白缝） ----
+  cells = _splitCellsByTextGaps(cells, lineSpans, geometry);
+
+  // ---- 3c. 第三轮：格子变了，重归一次（拆开的跨列行碎片要落到新格子里） ----
   assigned.clear();
   dropped.clear();
   _assignAtoms(
@@ -606,8 +710,8 @@ ParsedTimetable _parseWithGeometry({
   }
   // 课名归一在下面逐格做（_canonicalName 直接用 nameVotes）。
   // 教室修正的**票池用第二轮拆完的教室行**：跨列行拆开的碎片才是纠正形态
-  // —— `云杉洲四教` 在粗词表里只有 1 票（和病句打平），拆完后它有 2 票，
-  // 就能赢过只出现 1 次的 `云杉洲四敦`（2026-10-07 实测踩到）
+  // —— `梧桐洲四教` 在粗词表里只有 1 票（和病句打平），拆完后它有 2 票，
+  // 就能赢过只出现 1 次的 `梧桐洲四敦`（2026-10-07 实测踩到）
   final Map<String, int> locCounts = <String, int>{};
   for (final (_GeoCell, List<String>, List<String>) item in split) {
     for (final String line in item.$3) {
@@ -644,7 +748,14 @@ ParsedTimetable _parseWithGeometry({
           .map(cleanOcrLine)
           .where((String s) => s.isNotEmpty)
           .toList(),
-      spanningSuspicion: n.length < 2 || _cjkCount(n) < 1,
+      spanningSuspicion: n.length < 2 ||
+          _cjkCount(n) < 1 ||
+          // 「读起来通不通顺」的兜底：课名里不该出现数字，更不该出现教室行。
+          // 出现就说明教室被当成课名的一部分粘在了后面（2026-10-08 实测
+          // `通用学术英语-听说数203`、`微积分II(第二层次)数222`），
+          // 这种格子在逐格核对页会被标出来提醒重点看
+          RegExp(r'[0-9０-９]').hasMatch(n) ||
+          looksLikeRoomLine(n),
       startPeriod: cell.startPeriod,
       endPeriod: cell.endPeriod,
       name: n.isEmpty ? null : n,
@@ -667,6 +778,7 @@ class _GeoCell {
     required this.bottom,
     required this.startPeriod,
     required this.endPeriod,
+    this.colorEdges = const <ColorEdge>[],
   });
 
   final int weekday;
@@ -675,7 +787,176 @@ class _GeoCell {
   final int startPeriod;
   final int endPeriod;
 
+  /// 这一块里底色变化的 y（来自像素扫描，见 GeometryBlock.colorEdges）
+  final List<ColorEdge> colorEdges;
+
   bool containsY(double y, double tol) => y >= top - tol && y <= bottom + tol;
+}
+
+// ===========================================================================
+// 块内切分：相邻课程块在像素上可以连成一片，靠文字间隙 / 底色变化分开
+// ===========================================================================
+
+/// 把「像素上连成一片」的块按**格内文字的纵向间隙**切开。
+///
+/// ## 为什么必须切（2026-10-08 真图实测）
+///
+/// 相邻课程块可以紧挨着、中间**没有白缝**：周一列从 `y=498` 到 `y=1506`
+/// 是一整条连续色带（逐行彩色占比实测恒为 1.00，一个 0 都没有）
+/// —— 像素扫描只能给出一块，一块里挤了 4 门课。
+///
+/// ## 三个信号，缺一不可
+///
+///   1. **教室行 → 课名行**（结构信号，**不依赖间隙大小**）：这个 App 的每个
+///      课块都是「课名行… + 教室行」，教室行总在最后 —— 所以「教室行后面跟着
+///      一个课名行」就是课与课的分界。
+///      ⚠️ 这条专治**同名的两节课**：同名 → App 给同一个底色 → 底色变化线
+///      信号失效；课名长的话它俩之间的文字间隙还会被挤到 0.3 个节距
+///      （实测周四「程序设计基础」节 5-6 和节 7-8），只剩这条能分开。
+///   2. **文字行间隙**：同一门课内部的行间隙只有 30~50px，
+///      不同课之间至少 110px（≈0.87 个节距）。间隙 ≥ 0.75 个节距 → 直接切
+///   3. **底色变化**：光靠间隙会漏 —— 周四节 1-2 和节 3-4 之间的文字间隙
+///      只有 73px（0.58 个节距，比"课名在块顶、教室在块底"的单门课还小），
+///      但两块的底色不同（黄 `#fcf8df` → 粉 `#fbebde`）。所以间隙 ≥ 0.5 个
+///      节距时，只要间隙里有一条底色变化线，就按它切。
+///
+/// ## 切完的节次范围
+///
+/// 上界 = 段内**首个文字行**最近的那个节次（文字行比块边沿更贴近课的真实起点）；
+/// 下界 = 非末段 → `min(段覆盖到的末节, 下一段首节 - 1)`
+///        （`min` 是防止两门课之间本来就空一节时被硬撑过去）
+///        末段 → 段底边**完全罩住**的最后一个节次行，不加容差
+///        （块底边是 App 画的、带内边距的边：实测周一末块底边 1506，
+///          第 9 节行中心 1543.5 必须排除；夹具里周四跨 4 节的块靠这条兜住）
+List<_GeoCell> _splitCellsByTextGaps(
+  List<_GeoCell> cells,
+  Map<_GeoCell, List<(double, double, String)>> lineSpans,
+  TimetableGeometry geometry,
+) {
+  final double pitch = geometry.medianPitch;
+  final int anchorCount = geometry.labelCentersY.length;
+  final List<_GeoCell> out = <_GeoCell>[];
+
+  for (final _GeoCell cell in cells) {
+    final List<(double, double, String)> spans =
+        List<(double, double, String)>.of(
+            lineSpans[cell] ?? const <(double, double, String)>[])
+          ..sort(((double, double, String) a, (double, double, String) b) =>
+              a.$1.compareTo(b.$1));
+    if (spans.isEmpty) continue;
+
+    final List<double> cuts = <double>[];
+    for (int i = 1; i < spans.length; i++) {
+      final (double, double, String) prev = spans[i - 1];
+      final (double, double, String) next = spans[i];
+      final double gap = next.$1 - prev.$2;
+
+      // 信号①：教室行 → 课名行 = 新的一门课。
+      // ⚠️ 这条**不看间隙大小**：同名的两节课在真图上可以贴得很近
+      // （App 把它们画成一块同色的连续区域），间隙一小就没有别的信号可用了。
+      final bool byRoomLine = looksLikeRoomLine(prev.$3) &&
+          !looksLikeRoomLine(next.$3) &&
+          _cjkCount(next.$3) >= 2;
+      // 其余两个信号要求行与行之间**真的分开**（≥ 1/4 个节距），
+      // 否则文字行的上下沿噪声会造出假切点
+      if (gap < pitch * 0.25 && !byRoomLine) continue;
+
+      // 信号③：间隙里**最强**的那条底色变化线（不是第一条）——
+      // 文字抗锯齿也会蹭出强度 8~10 的假线，而真边界实测 10~18
+      ColorEdge? best;
+      if (gap >= pitch * 0.5) {
+        for (final ColorEdge e in cell.colorEdges) {
+          if (e.y <= prev.$2 + 2 || e.y >= next.$1 - 2) continue;
+          if (best == null || e.strength > best.strength) best = e;
+        }
+      }
+
+      if (best != null && best.strength >= 10) {
+        cuts.add(best.y);
+      } else if (byRoomLine || gap >= pitch * 0.75) {
+        cuts.add((prev.$2 + next.$1) / 2);
+      }
+    }
+
+    final List<double> edges = <double>[cell.top, ...cuts, cell.bottom];
+    final List<_GeoCell> segs = <_GeoCell>[];
+    for (int i = 0; i + 1 < edges.length; i++) {
+      final List<(double, double, String)> seg =
+          <(double, double, String)>[
+        for (final (double, double, String) s in spans)
+          if (s.$1 >= edges[i] && s.$1 < edges[i + 1]) s,
+      ];
+      if (seg.isEmpty) continue;
+      segs.add(_GeoCell(
+        weekday: cell.weekday,
+        top: edges[i],
+        bottom: edges[i + 1],
+        startPeriod: _periodNear(geometry, seg.first.$1),
+        endPeriod: 1,
+      ));
+    }
+    if (segs.isEmpty) {
+      out.add(cell);
+      continue;
+    }
+
+    for (int i = 0; i < segs.length; i++) {
+      final _GeoCell s = segs[i];
+      int end;
+      if (i + 1 < segs.length) {
+        final int byNext = segs[i + 1].startPeriod - 1;
+        final int byExtent = _lastPeriodCovering(geometry, s.top, s.bottom);
+        end = byExtent < byNext ? byExtent : byNext;
+      } else {
+        end = _lastPeriodInside(geometry, s.bottom);
+      }
+      if (end < s.startPeriod) end = s.startPeriod;
+      if (end > anchorCount) end = anchorCount;
+      out.add(_GeoCell(
+        weekday: s.weekday,
+        top: s.top,
+        bottom: s.bottom,
+        startPeriod: s.startPeriod,
+        endPeriod: end,
+      ));
+    }
+  }
+  return out;
+}
+
+/// y 最近的那个节次行是第几节（1 起）。
+int _periodNear(TimetableGeometry geometry, double y) {
+  int best = 1;
+  double bestDist = double.infinity;
+  for (int i = 0; i < geometry.labelCentersY.length; i++) {
+    final double d = (geometry.labelCentersY[i] - y).abs();
+    if (d < bestDist) {
+      bestDist = d;
+      best = i + 1;
+    }
+  }
+  return best;
+}
+
+/// `[top, bottom]` 罩到的最后一个节次行（带容差）—— 给"切点"当底边用。
+int _lastPeriodCovering(TimetableGeometry geometry, double top, double bottom) {
+  final List<int> p = geometry.periodsCovering(
+    GeometryBlock(left: 0, top: top, right: 0, bottom: bottom),
+  );
+  return p.isEmpty ? 1 : p.last;
+}
+
+/// 底边**完全罩住**的最后一个节次行（不加容差）—— 给"块的真实底边"用。
+///
+/// 块的底边是 App 画出来的、比最后一个节次行低一点点的边（实测内边距
+/// ≈0.3 个节距）。加容差会把**下一节**的行也算进来：周一末块底边 1506、
+/// 第 9 节行中心 1543.5（差 37.5px，容差 37.8px）—— 就差 0.3px 会多算一节。
+int _lastPeriodInside(TimetableGeometry geometry, double bottom) {
+  int best = 0;
+  for (int i = 0; i < geometry.labelCentersY.length; i++) {
+    if (geometry.labelCentersY[i] <= bottom) best = i + 1;
+  }
+  return best == 0 ? 1 : best;
 }
 
 /// OCR 文本行 → 归属到格子。跨列粘连行在这里拆（[vocab] 有词表才拆得准）。
@@ -687,6 +968,7 @@ void _assignAtoms({
   required List<String> dropped,
   required TimetableVocab? vocab,
   Set<String>? dirtyLines,
+  Map<_GeoCell, List<(double, double, String)>>? lineSpans,
   required double headerTop,
   required double headerBottom,
   required double dateRowBottom,
@@ -694,37 +976,69 @@ void _assignAtoms({
   required double medianHeight,
   required double pitch,
 }) {
-  final RegExp numberPattern = RegExp(r'^\d{1,2}$');
   const Set<String> kNavWords = <String>{
     '首页', '课表', '课程表', '成绩', '我的', '日程', '发现', '校园',
   };
-  final RegExp datePattern = RegExp(r'^\d{1,2}-\d{1,2}$');
+  // 日期行：`M-D` / `M/D`，也认**光秃秃的日号**（见 parseTimetable 里的说明）
+  final RegExp datePattern = RegExp(r'^\d{1,2}[/\-]\d{1,2}$');
+  final RegExp dayOnlyPattern = RegExp(r'^\d{1,2}$');
   bool isAllDateTokens(String t) =>
-      t.isNotEmpty && t.split(RegExp(r'\s+')).every(datePattern.hasMatch);
+      t.isNotEmpty &&
+      t.split(RegExp(r'\s+')).every((String s) =>
+          datePattern.hasMatch(s) || dayOnlyPattern.hasMatch(s));
 
-  for (final OcrBlock b in sorted) {
-    final String raw = b.text.trim();
-    if (b.bottom <= headerTop + 2) continue;
-    if (_looksLikeWeekdayHeader(raw) && b.bottom <= headerBottom + 2) continue;
-    if (b.bottom <= dateRowBottom + 2 && isAllDateTokens(raw)) continue;
-    if (numberPattern.hasMatch(raw) && b.centerX < columns.first.left) continue;
-    if (kNavWords.contains(raw) || b.centerY > maxY - medianHeight * 1.2) {
-      dropped.add(raw);
+  for (final OcrBlock src in sorted) {
+    final String raw = src.text.trim();
+    if (src.bottom <= headerTop + 2) continue;
+    if (_looksLikeWeekdayHeader(raw) && src.bottom <= headerBottom + 2) continue;
+    if (src.bottom <= dateRowBottom + 2 && isAllDateTokens(raw)) continue;
+
+    // 节次栏（第一列左边那一竖条）里的东西**全都不是课程内容**：节次号、时刻。
+    //
+    // ⚠️ 2026-10-07 真机实测：原来只丢"纯数字"（`1`/`2`），于是 `09:35`
+    // 这种带冒号的时刻漏了过去 —— 它又归不进任何列，被下面
+    // 「`?? columns.first.weekday`」的兜底塞进了**周一**，课名直接变成
+    // `09:3509:5010:35高等数学A()上10:40`。
+    //
+    // ⚠️ 但**不能整条丢**（2026-10-08 真机实测）：这个 App 会把「时刻」和
+    // 课程内容粘成一行（`08:00-08:50 排球场`、`16:10-17:00 与公民`），
+    // 整条丢掉会把教室和课名尾巴一起丢 —— 实测周一丢了「排球场」「与公民」
+    // 「204」、周三丢了「层次)」，这些格的教室列全是空。
+    // 所以：**整条都在左栏才丢**；伸进第一列的，剥掉行首时刻再用。
+    OcrBlock b = src;
+    if (b.right <= columns.first.left + 2) continue;
+    final String stripped = _stripLeadClock(b.text);
+    if (stripped.length != b.text.length) {
+      final int cut = b.text.length - stripped.length;
+      final double total = _wideUnits(b.text);
+      final double frac =
+          total <= 0 ? 0 : _wideUnits(b.text.substring(0, cut)) / total;
+      b = OcrBlock(
+        text: stripped,
+        left: b.left + b.width * frac,
+        top: b.top,
+        right: b.right,
+        bottom: b.bottom,
+      );
+    }
+    final String body = b.text.trim();
+    if (kNavWords.contains(body) || b.centerY > maxY - medianHeight * 1.2) {
+      dropped.add(body);
       continue;
     }
 
-      // 跨列粘连行：拆成每列一份；拆不了（没词表/太怪）就整条按中心归
+    // 跨列粘连行：拆成每列一份；拆不了（没词表/太怪）就整条按中心归
     final List<(int, String)> pieces = _isSpanning(b, columns)
         ? (vocab == null
             ? <(int, String)>[
                 (_columnAt(columns, b.centerX)?.weekday ??
                     columns.first.weekday,
-                raw),
+                body),
               ]
             : _splitSpanningLine(b, columns, vocab))
         : <(int, String)>[
             (_columnAt(columns, b.centerX)?.weekday ?? columns.first.weekday,
-                raw),
+                body),
           ];
 
     for (final (int, String) piece in pieces) {
@@ -743,6 +1057,9 @@ void _assignAtoms({
         dirtyLines?.add(text);
       }
       assigned.putIfAbsent(holder, () => <String>[]).add(text);
+      lineSpans
+          ?.putIfAbsent(holder, () => <(double, double, String)>[])
+          .add((b.top, b.bottom, text));
     }
   }
 }
@@ -832,9 +1149,16 @@ class SpanPiece {
 ///   1. **列边界**：切出来的每段应该完整落在某一列的 x 范围里
 ///   2. **空格痕迹**：OCR 在列与列的接缝处常留一个空格（`307敦室 A (一)`）
 ///   3. **词表**：切出来的段是已知的课名 / 楼名 / 教室行才可信；
-///      `洲云杉後|云杉楼云杉` 比按列边界硬切的 `洲云杉後云|杉楼云杉…` 对
+///      `洲梧桐後|梧桐楼梧桐` 比按列边界硬切的 `洲梧桐後云|杉楼梧桐…` 对
 ///
-/// 字符的 x 按非空白字符数均分（和表头折算同一套逻辑，空格不占字宽）。
+/// 字符的 x 按**显示宽度**均分（汉字 1、数字/冒号/连字符半宽；空格不占字宽，
+/// 和表头折算同一套约定）。
+///
+/// ⚠️ 不能按**字符数**均分（2026-10-08 真图实测）：数字只有汉字一半宽，
+/// 按字符数算会把窄字符的中心往右推 —— `教222 写`（框 169..292）里第 3 个
+/// `2` 的中心被算成 255.1，只比列边界 254.5 靠右 0.6px，于是 DP 认为
+/// 「教22」全在第一列、「2写」全在第二列，切点提前一个字，
+/// **教室变成 `教22`**（周一的 `教222` 就这么丢了一个字）。
 List<(int, String)> _splitSpanningLine(
   OcrBlock b,
   List<WeekdayColumn> columns,
@@ -857,9 +1181,18 @@ List<(int, String)> _splitSpanningLine(
   final int n = chars.length;
   if (n == 0) return const <(int, String)>[];
 
-  final double charW = b.width / n;
-  double xOf(int i) => b.left + i * charW; // 字符 i 的左沿
-  double cxOf(int i) => b.left + (i + 0.5) * charW;
+  // 每个字符的"显示宽度"以及它左沿之前累积的宽度
+  final List<double> unitBefore = <double>[0];
+  final List<double> unitW = <double>[];
+  for (int i = 0; i < n; i++) {
+    final double u = _wideUnits(chars[i]);
+    unitW.add(u);
+    unitBefore.add(unitBefore[i] + u);
+  }
+  final double totalUnits = unitBefore[n];
+  final double perUnit = totalUnits <= 0 ? b.width / n : b.width / totalUnits;
+  double xOf(int i) => b.left + unitBefore[i] * perUnit; // 字符 i 的左沿
+  double cxOf(int i) => b.left + (unitBefore[i] + unitW[i] / 2) * perUnit;
 
   // 每个字符属于哪列（按字符中心）
   final List<int> charCol = <int>[
@@ -935,7 +1268,7 @@ List<(int, String)> _splitSpanningLine(
   // DP 会把压在列界线上的字切成**孤段**：自己一段就既没有跨列惩罚、
   // 又不用凑词表（单字不给词表加分），成本近乎零 —— 于是『云』被单独
   // 切出来。孤字到底归左边的词还是右边的词，拿词表裁决：
-  // 跟哪边拼得上就跟哪边（『云』+『杉楼云杉』= 词表里的整词 → 归右）。
+  // 跟哪边拼得上就跟哪边（『云』+『杉楼梧桐』= 词表里的整词 → 归右）。
   for (int k = 0; k < flat.length; k++) {
     if (flat[k].text.length != 1) continue;
     if (!_cjkPattern.hasMatch(flat[k].text)) continue;
@@ -949,11 +1282,16 @@ List<(int, String)> _splitSpanningLine(
     // 云判给右边（2026-10-07 第八轮踩到）。精确 2 分、模糊 1 分。
     final int leftScore = hasLeft ? _vocabHitScore(vocab, withLeft) : 0;
     final int rightScore = hasRight ? _vocabHitScore(vocab, withRight) : 0;
-    if (leftScore > rightScore) {
+    // ⚠️ 只有**精确命中**才允许把孤字拽到隔壁列（2026-10-08 真图实测）：
+    // 模糊命中（差一个字）什么都可能是 —— 周一的 `写`（周二的课名尾巴）
+    // 往左拼成 `教222写`，和词表里的 `教222` 只差一个字，就被拽进了周一，
+    // 教室变成 `教222写`。孤字本来就该留在**自己那一列**，除非另一边
+    // 有现成的词能对上。
+    if (leftScore >= 2 && leftScore > rightScore) {
       flat[k - 1] = SpanPiece(weekday: flat[k - 1].weekday, text: withLeft);
       flat.removeAt(k);
       k--;
-    } else if (rightScore > 0 && rightScore >= leftScore) {
+    } else if (rightScore >= 2 && rightScore >= leftScore) {
       flat[k + 1] =
           SpanPiece(weekday: flat[k + 1].weekday, text: withRight);
       flat.removeAt(k);
@@ -991,11 +1329,15 @@ int _vocabHitScore(TimetableVocab vocab, String text) {
 ///
 /// 两条路，词表优先：
 ///   1. **词表前缀**：把所有行拼起来，看词表里哪条课名是它的前缀
-///      （`流体力学` + `云杉洲三教敦…` → 课名 `流体力学`）。换行边界按
+///      （`流体力学` + `梧桐洲三教敦…` → 课名 `流体力学`）。换行边界按
 ///      逐行累计长度对齐，对不齐（差 1 字以内）才接受
-///   2. **强规则**：第一个含 楼/室/场/馆/房/敦 的行就是教室行起点
-///      （课程名几乎不含这些字；教室行几乎总含 —— 连被截断的
-///      `云杉楼云杉` 和被认错字的 `云杉洲四敦` 都能兜住）
+///   2. **强规则**：第一个"像教室行"的行就是教室行起点
+///      （课程名几乎不含 楼/室/场/馆/房/敦/教；教室行几乎总含 —— 连被截断的
+///      `梧桐楼梧桐` 和被认错字的 `梧桐洲四敦` 都能兜住）。
+///      ⚠️ 判据用 [looksLikeRoomLine] 而不是裸的 [kRoomLinePattern]：
+///      真图里教室行还有两种"一个教室字都没有"的形态（认错字的 `数222`、
+///      被换行拆出来的 `02`），2026-10-08 实测漏了这两类，教室整行被当成
+///      课名的一部分（课名变成 `通用学术英语-听说数203`）
 (List<String>, List<String>) _splitCellLines(
     List<String> lines, TimetableVocab vocab) {
   if (lines.isEmpty) return (<String>[], <String>[]);
@@ -1017,9 +1359,29 @@ int _vocabHitScore(TimetableVocab vocab, String text) {
       if (cum >= bestVocab.length) {
         // 边界要对得上行尾（差 1 字以内），否则词表这条可能不属于这个格
         if (cum - bestVocab.length <= 1) {
+          int cut = k + 1;
+          // ⚠️ 词表里的课名可能**比真名短**：真图上的课名是 `高等数学A()上`
+          // （`(I)上` 被 OCR 认成 `()上`），而词表投票出来的是 `高等数学A` ——
+          // 于是 `()上` 被错切给了教室（教室成了 `()上@教2-213`）。
+          //
+          // 判据：切点后第一行**含括号/数字/字母**（= 明显不是纯汉字的教室碎片）
+          // 才往后延到第一个像教室的行为止。
+          //
+          // ⚠️ **纯汉字碎片一律不动**：那可能是教室名换行后的第一段
+          // （`东苑综`+`台楼…`、`紫荆综`+`合楼202`），归教室的事交给强规则那边的
+          // 「教室跨行」处理 —— 这里再延一次会把教室碎片推回课名
+          // （2026-10-08 真机 + 合成夹具双向实测踩到）。
+          final String head = cut < lines.length ? squeeze(lines[cut]) : '';
+          if (head.isNotEmpty && RegExp(r'[^\u4e00-\u9fa5]').hasMatch(head)) {
+            int rs = cut;
+            while (rs < lines.length && !looksLikeRoomLine(lines[rs])) {
+              rs++;
+            }
+            if (rs < lines.length) cut = rs;
+          }
           return (
-            lines.sublist(0, k + 1),
-            lines.sublist(k + 1),
+            lines.sublist(0, cut),
+            lines.sublist(cut),
           );
         }
         break;
@@ -1027,10 +1389,32 @@ int _vocabHitScore(TimetableVocab vocab, String text) {
     }
   }
 
-  // 2) 强规则
-  for (int k = 0; k < lines.length; k++) {
-    if (kRoomLinePattern.hasMatch(lines[k])) {
-      return (lines.sublist(0, k), lines.sublist(k));
+  // 2) 强规则。⚠️ 跳过第 0 行：第一行就当教室行的话课名会空掉，
+  //    宁可整格都算课名（交给用户改）
+  for (int k = 1; k < lines.length; k++) {
+    if (looksLikeRoomLine(lines[k])) {
+      int start = k;
+      // 教室名**跨行**：真图上 `东苑综合楼…` 会被 OCR 拆成 `东苑综` + `台楼…`，
+      // 而 `东苑综` 单独不含 楼/室/场/馆/房/敦/教、也不含数字 —— 看不出是教室，
+      // 于是被算进课名（真图周4 7-8 实测：课名成了 `…(Python...东苑综`）。
+      // 往上看一行：纯汉字、3~4 字、且课名还剩 ≥ 4 字，就也算教室。
+      //
+      // ⚠️「课名还剩 ≥ 4 字」这条不能省：真图周3 3-4 的课名
+      //   `智能建造技术` 尾行是 `技术境`（3 字纯汉字），去掉它课名只剩
+      //   `智慧人`（3 字）—— 那就是把课名切碎。同理周1 7-8 的 `参与`（2 字）
+      //   靠长度下限挡住、`层次)`/`据的...`/`2写` 靠「纯汉字」挡住。
+      if (start >= 2) {
+        final String prev = squeeze(lines[start - 1]);
+        final String head = squeeze(lines.sublist(0, start - 1).join());
+        final OcrRules rr = ocrRules;
+        if (prev.length >= rr.roomSpanMinLen &&
+            prev.length <= rr.roomSpanMaxLen &&
+            _cjkCount(prev) == prev.length &&
+            head.length >= rr.roomSpanMinHead) {
+          start -= 1;
+        }
+      }
+      return (lines.sublist(0, start), lines.sublist(start));
     }
   }
   return (lines, <String>[]);
@@ -1038,7 +1422,7 @@ int _vocabHitScore(TimetableVocab vocab, String text) {
 
 /// 从"已经粗拆过"的格子里攒词表。
 ///
-/// 词表要存**行粒度**的教室词（`云杉楼云杉` 这种被换行截断的楼名整行存），
+/// 词表要存**行粒度**的教室词（`梧桐楼梧桐` 这种被换行截断的楼名整行存），
 /// 拆粘连行时碎片才对得上；课名存去空格的整名。
 /// [dirtyCells] 是收到过「未拆整条跨列行」的格子 —— 它们的内容是几列
 /// 粘一起的，进词表会产出 `云506教室` 这种假词（2026-10-07 实测踩到）。
@@ -1176,7 +1560,8 @@ ParsedTimetable _parseTextOnly({
     if (b.bottom <= headerTop + 2) continue;
     if (_looksLikeWeekdayHeader(t) && b.bottom <= headerBottom + 2) continue;
     if (b.bottom <= dateRowBottom + 2 && isAllDateTokens(t)) continue;
-    if (numberPattern.hasMatch(t) && b.centerX < firstColumnLeft) continue;
+    // 节次栏里的一切都不是课程内容（见 `_assignAtoms` 里的同款说明）
+    if (b.centerX < firstColumnLeft) continue;
     if (kNavWords.contains(t) || b.centerY > maxY - medianHeight * 1.2) {
       navDropped.add(t);
       continue;
@@ -1287,6 +1672,230 @@ class _HeaderPart {
   final double right;
   final double top;
   final double bottom;
+}
+
+/// 裸表头扫描结果
+class _BareHeaderScan {
+  const _BareHeaderScan({required this.columns, required this.labelParts});
+
+  /// 用于建列的星期位置（可能含从日期行推导出来的）
+  final List<_HeaderPart> columns;
+
+  /// **只含真正的表头标签** —— 调用方用它定表头行的上下沿
+  final List<_HeaderPart> labelParts;
+}
+
+/// 裸表头（`一 二 三 四 五 六 日`，没有「周」字）+ 日期行 → 补齐 7 列星期。
+///
+/// 触发条件与理由见 `parseTimetable` 里调用点的注释。核心是两条腿走路：
+///   - **位置**来自日期行（`11/2 11/3 …`）：7 个都在、间距天然就是列距
+///   - **身份**来自标签：认得出的那三四个（`三四`/`五`/`六`/`日m`）当锚点，
+///     按列距把位置翻译成星期号
+///
+/// 两边一配，ML Kit 漏读的「一」「二」也就补回来了。
+_BareHeaderScan? _bareHeaderScan(
+  List<OcrBlock> sorted,
+  double maxY,
+  double medianHeight,
+) {
+  // ---- ① 表头标签：连续的周几字（允许 `日m` 这种带非汉字尾巴的） ----
+  //
+  // ⚠️ 为什么卡 y < 45%：底部导航栏的「三」（三条杠那个图标）也是一个
+  // 孤立的「三」字块，不卡 y 会被当成周三的表头。
+  final double yLimit = maxY * 0.45;
+  final RegExp lead = RegExp(r'^[一二三四五六日天]+');
+  final List<_HeaderPart> labels = <_HeaderPart>[];
+  for (final OcrBlock b in sorted) {
+    if (b.top > yLimit) continue;
+    final String dense =
+        _stripLeadNoise(b.text).replaceAll(_spacePattern, '');
+    // ⚠️ 长度上限是 **7**（一周最多 7 天），不是 3。
+    //
+    // 2026-10-08 真机实测：ML Kit 会把「一」「二」整块漏读（细横线字形），
+    // 剩下的 `三 四 五 六` **粘成一个块**（dense = `三四五六`，长度 4）——
+    // 卡在 3 就把整行表头跳过了，只剩孤零零一个 `日`，兜底直接放弃
+    // （用户看到的就是"表头没有『周』字就识别不出来"）。
+    // 反正下面「尾巴还有汉字就跳过」那条已经能挡住 `三教` 这类正文，
+    // 长度本身不必卡死。
+    if (dense.isEmpty || dense.length > 7) continue;
+    final RegExpMatch? m = lead.firstMatch(dense);
+    if (m == null) continue;
+    final String run = m.group(0)!;
+    // 尾巴还有汉字 → 是正文（`三教` 之类），不是表头
+    if (_cjkCount(dense.substring(run.length)) > 0) continue;
+    // 一个块里可能有多个周几（`三四`、`五 六`）—— 按字符均分给 x 区间。
+    // ⚠️ 这里的 x 只是近似（块里夹的空格不占字宽），下面会拿日期行校正。
+    for (int i = 0; i < run.length; i++) {
+      final double half = b.width / dense.length / 2;
+      final double cx = b.left + b.width * ((i + 0.5) / dense.length);
+      labels.add(_HeaderPart(
+        weekday: _weekdayNumber(run[i]),
+        left: cx - half,
+        right: cx + half,
+        top: b.top,
+        bottom: b.bottom,
+      ));
+    }
+  }
+  if (labels.isEmpty) return null;
+
+  // 表头一定在同一横排：按中心线聚类，取最大的那一簇
+  final List<_HeaderPart> labelRow = _largestRow(labels, medianHeight);
+  if (labelRow.length < 2) return null;
+
+  final double rowTop = labelRow
+      .map((_HeaderPart h) => h.top)
+      .reduce((double a, double b) => a < b ? a : b);
+  final double rowBottom = labelRow
+      .map((_HeaderPart h) => h.bottom)
+      .reduce((double a, double b) => a > b ? a : b);
+
+  // ---- ② 日期行：表头正下方那一排 `11/2 11/3 …` ----
+  final RegExp datePattern = RegExp(r'^\d{1,2}[/\-]\d{1,2}$');
+  final List<_HeaderPart> dates = <_HeaderPart>[];
+  for (final OcrBlock b in sorted) {
+    if (b.top < rowTop - 20 || b.top > rowBottom + 140) continue;
+    if (!datePattern.hasMatch(_stripLeadNoise(b.text))) continue;
+    dates.add(_HeaderPart(
+      weekday: 0,
+      left: b.left,
+      right: b.right,
+      top: b.top,
+      bottom: b.bottom,
+    ));
+  }
+  dates.sort((_HeaderPart a, _HeaderPart b) =>
+      ((a.left + a.right) / 2).compareTo((b.left + b.right) / 2));
+
+  // ---- ③ 列距：优先用日期行（间距天然均匀），没有就退回标签 ----
+  double pitch = _medianPitch(dates);
+  if (pitch <= 0) pitch = _medianPitch(labelRow, byWeekdayOrder: true);
+  if (pitch <= 0) return null;
+
+  // ---- ④ 身份锚点：找一对「标签 ↔ 日期」最贴近的，用它把位置翻译成星期 ----
+  final Map<int, _HeaderPart> byWeekday = <int, _HeaderPart>{};
+  int? anchorWeekday;
+  double anchorX = 0;
+  double bestDist = double.infinity;
+  for (final _HeaderPart l in labelRow) {
+    final double lx = (l.left + l.right) / 2;
+    for (final _HeaderPart d in dates) {
+      final double dx = (d.left + d.right) / 2;
+      final double dist = (dx - lx).abs();
+      if (dist < bestDist) {
+        bestDist = dist;
+        anchorWeekday = l.weekday;
+        anchorX = dx;
+      }
+    }
+  }
+
+  // 日期在列里居中、7 个都在 —— **位置以日期为准**（标签那个 x 是近似值）
+  //
+  // ⚠️ 这里必须**重新构造** `_HeaderPart` 并把真正的星期号写进 `weekday` 字段。
+  // 直接塞 `dates` 里的原件是不行的：那些件的 `weekday` 是占位值 0，
+  // 星期号只在 Map 的 key 上 —— 调用方按 `h.weekday` 合并时 7 列会全塌成
+  // 一个 key `0`（2026-10-07 踩到，表现为"7 列变成 1 列"）。
+  if (anchorWeekday != null) {
+    for (final _HeaderPart d in dates) {
+      final double dx = (d.left + d.right) / 2;
+      final int w = anchorWeekday + ((dx - anchorX) / pitch).round();
+      if (w < 1 || w > 7) continue;
+      byWeekday[w] = _HeaderPart(
+        weekday: w,
+        left: d.left,
+        right: d.right,
+        top: d.top,
+        bottom: d.bottom,
+      );
+    }
+  }
+  // 日期行没有的星期，退回标签自己的位置
+  for (final _HeaderPart l in labelRow) {
+    byWeekday.putIfAbsent(l.weekday, () => l);
+  }
+
+  // ---- ⑤ 还缺的星期：按列距往外推 ----
+  //
+  // ⚠️ 只在**可见范围内**补：截图横向滚过、周一整列在画面外时，
+  // 凭空在左边造一列会把节次栏的数字也吃进课程区。
+  final List<int> known = byWeekday.keys.toList()..sort();
+  final List<double> knownX = byWeekday.values
+      .map((_HeaderPart h) => (h.left + h.right) / 2)
+      .toList()
+    ..sort();
+  for (int w = 1; w <= 7; w++) {
+    if (byWeekday.containsKey(w)) continue;
+    int base = known.first;
+    for (final int k in known) {
+      if ((k - w).abs() < (base - w).abs()) base = k;
+    }
+    final double bx = (byWeekday[base]!.left + byWeekday[base]!.right) / 2;
+    final double x = bx + (w - base) * pitch;
+    if (x < knownX.first - pitch * 0.55) continue;
+    if (x > knownX.last + pitch * 0.55) continue;
+    byWeekday[w] = _HeaderPart(
+      weekday: w,
+      left: x - 1,
+      right: x + 1,
+      top: rowTop,
+      bottom: rowBottom,
+    );
+  }
+
+  if (byWeekday.length < kMinWeekdayColumns) return null;
+  final List<_HeaderPart> columns = byWeekday.values.toList()
+    ..sort((_HeaderPart a, _HeaderPart b) => a.weekday.compareTo(b.weekday));
+  return _BareHeaderScan(columns: columns, labelParts: labelRow);
+}
+
+/// 取「中心线接近」的一簇里最大的那一簇 —— 表头永远在同一横排
+List<_HeaderPart> _largestRow(List<_HeaderPart> parts, double tolerance) {
+  final List<_HeaderPart> sorted = List<_HeaderPart>.of(parts)
+    ..sort((_HeaderPart a, _HeaderPart b) =>
+        ((a.top + a.bottom) / 2).compareTo((b.top + b.bottom) / 2));
+  List<_HeaderPart> best = const <_HeaderPart>[];
+  int i = 0;
+  while (i < sorted.length) {
+    final double y0 = (sorted[i].top + sorted[i].bottom) / 2;
+    final List<_HeaderPart> run = <_HeaderPart>[];
+    while (i < sorted.length &&
+        (((sorted[i].top + sorted[i].bottom) / 2) - y0).abs() <= tolerance) {
+      run.add(sorted[i]);
+      i++;
+    }
+    if (run.length > best.length) best = run;
+  }
+  return best;
+}
+
+/// 相邻中心距的中位数。
+///
+/// [byWeekdayOrder] = true 时按**星期号**排序再量（标签在块里的顺序不可靠，
+/// 但星期号可靠）；否则按 x 排序（日期行本来就是从左到右）。
+double _medianPitch(List<_HeaderPart> parts, {bool byWeekdayOrder = false}) {
+  if (parts.length < 2) return 0;
+  final List<_HeaderPart> sorted = List<_HeaderPart>.of(parts);
+  if (byWeekdayOrder) {
+    sorted.sort(
+        (_HeaderPart a, _HeaderPart b) => a.weekday.compareTo(b.weekday));
+  } else {
+    sorted.sort((_HeaderPart a, _HeaderPart b) =>
+        ((a.left + a.right) / 2).compareTo((b.left + b.right) / 2));
+  }
+  final List<double> gaps = <double>[];
+  for (int i = 1; i < sorted.length; i++) {
+    // 按星期排序时，两个标签可能隔着几个星期（漏读），要除以跨的格数
+    final int step =
+        byWeekdayOrder ? (sorted[i].weekday - sorted[i - 1].weekday) : 1;
+    if (step <= 0) continue;
+    gaps.add((((sorted[i].left + sorted[i].right) / 2) -
+            ((sorted[i - 1].left + sorted[i - 1].right) / 2)) /
+        step);
+  }
+  if (gaps.isEmpty) return 0;
+  gaps.sort();
+  return gaps[gaps.length ~/ 2];
 }
 
 class _PeriodAnchor {

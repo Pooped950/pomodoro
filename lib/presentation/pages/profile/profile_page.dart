@@ -4,18 +4,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/app_info.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/utils/formatters.dart';
+import '../../../domain/remote/remote_config.dart';
 import '../../../domain/stats/stats_summary.dart';
 import '../../providers/stats_provider.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/app_page_route.dart';
 import '../../widgets/pressable.dart';
-import '../../widgets/update_row.dart';
 import '../manual/about_page.dart';
 import '../manual/manual_dialog.dart';
-import '../settings/import_timetable_page.dart';
 import '../settings/keepalive_page.dart';
 import '../settings/settings_detail_page.dart';
-import '../update/update_page.dart';
 
 /// 「我的」（一级页）
 ///
@@ -49,7 +47,8 @@ class ProfilePage extends ConsumerWidget {
               kBottomNavSpace,
             ),
             children: <Widget>[
-              Text('我的', style: text.titleLarge),
+              // ⚠️ 文案统一走 t()：远程配置里给同名 key 就能改，不用发版
+              Text(t('我的'), style: text.titleLarge),
               const SizedBox(height: AppSpacing.section),
 
               _SummaryCard(data: async.value),
@@ -59,8 +58,8 @@ class ProfilePage extends ConsumerWidget {
                 padding: EdgeInsets.zero,
                 child: _NavRow(
                   icon: Icons.tune_rounded,
-                  title: '设置',
-                  subtitle: '计时 · 提醒 · 外观 · 背景 · 动效',
+                  title: t('设置'),
+                  subtitle: t('计时 · 提醒 · 外观 · 背景 · 动效'),
                   onTap: () => pushAppPage(context, const SettingsDetailPage()),
                 ),
               ),
@@ -72,18 +71,10 @@ class ProfilePage extends ConsumerWidget {
                   children: <Widget>[
                     _NavRow(
                       icon: Icons.shield_moon_outlined,
-                      title: '后台保活设置',
-                      subtitle: '息屏后到点提醒能否可靠工作，取决于这几项',
+                      title: t('后台保活设置'),
+                      subtitle: t('息屏后到点提醒能否可靠工作，取决于这几项'),
                       onTap: () =>
                           pushAppPage(context, const KeepAlivePage()),
-                    ),
-                    const _RowDivider(),
-                    _NavRow(
-                      icon: Icons.calendar_month_outlined,
-                      title: '导入课表',
-                      subtitle: '截两张课表截图，自动拼接 + 识别',
-                      onTap: () =>
-                          pushAppPage(context, const ImportTimetablePage()),
                     ),
                   ],
                 ),
@@ -96,27 +87,18 @@ class ProfilePage extends ConsumerWidget {
                   children: <Widget>[
                     _NavRow(
                       icon: Icons.menu_book_outlined,
-                      title: '使用手册',
-                      subtitle: '计时 · 任务 · 统计 · 课表 · 保活设置',
+                      title: t('使用手册'),
+                      subtitle: t('计时 · 任务 · 统计 · 课表 · 保活设置'),
                       onTap: () => showManualDialog(context),
                     ),
                     const _RowDivider(),
                     _NavRow(
                       icon: Icons.info_outline_rounded,
-                      title: '关于',
+                      title: t('关于'),
                       subtitle: '版本 $kAppVersion',
                       onTap: () => pushAppPage(context, const AboutPage()),
                     ),
                   ],
-                ),
-              ),
-
-              // 最下面一行：检查更新（有新版时这里会出现小红点）
-              const SizedBox(height: AppSpacing.section),
-              AppCard(
-                padding: EdgeInsets.zero,
-                child: UpdateRow(
-                  onTap: () => pushAppPage(context, const UpdatePage()),
                 ),
               ),
             ],

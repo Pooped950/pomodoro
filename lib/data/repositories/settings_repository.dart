@@ -20,6 +20,16 @@ class SettingsRepository {
   /// 主题模式（AppThemeMode）的存储键
   static const String keyThemeMode = 'theme_mode';
 
+  /// 是否跟随系统壁纸取主题色（Material You）。**默认关** —— 见
+  /// [DynamicColorNotifier] 的注释（品牌色是番茄红/橙，不跟壁纸跑）。
+  static const String keyDynamicColor = 'dynamic_color';
+
+  /// 远程配置（`remote_config.json`）原文缓存 —— 拉不到时用上次那份
+  static const String keyRemoteConfig = 'remote_config';
+
+  /// 上次拉远程配置的时间（节流用）
+  static const String keyRemoteConfigAt = 'remote_config_at';
+
   /// 到点提醒（ReminderSettings）的存储键
   static const String keyReminder = 'reminder';
 

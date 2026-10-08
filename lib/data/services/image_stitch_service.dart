@@ -17,6 +17,8 @@ class StitchOutcome {
     this.chrome = ChromeInsets.none,
     this.swapped = false,
     this.match,
+    this.dstY = 0,
+    this.srcTop = 0,
   });
 
   /// 拼好的整张图（PNG，落在应用缓存目录里，可以直接喂给识别器）
@@ -38,6 +40,16 @@ class StitchOutcome {
 
   final int width;
   final int height;
+
+  /// 上半张的**内容区末尾**落在拼图的第几行（= `topHeight - chrome.bottom`）。
+  ///
+  /// 拼图 = 上半张的 `[0, dstY)` + 下半张的 `[srcTop, bottomHeight)`。
+  /// 识别时要把两张图**各自 OCR** 的结果按这两个值合并到拼图坐标系
+  /// （为什么不能直接 OCR 拼好的高图，见 `half_ocr_merge.dart`）。
+  final int dstY;
+
+  /// 下半张从**它自己的第几行**开始接上来
+  final int srcTop;
 
   /// 自动对缝时的匹配信息；用户手动指定重叠高度时为 null
   final StitchMatch? match;
@@ -308,6 +320,8 @@ class ImageStitchService {
         swapped: swapped,
         width: width,
         height: height,
+        dstY: dstY,
+        srcTop: srcTop,
         match: match,
       );
     } finally {

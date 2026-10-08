@@ -52,7 +52,9 @@ class FloatingNavBar extends StatelessWidget {
   static const List<NavItem> defaultItems = <NavItem>[
     NavItem(icon: Icons.timer_outlined, label: '计时'),
     // 第二格：任务与统计合并（页内两个小标签切换，见 TaskStatsPage）
-    NavItem(icon: Icons.check_circle_outline, label: '任务'),
+    // 2026-10-07 用户要求：标签直接写「任务/统计」—— 只写「任务」时，
+    // 用户找不到统计入口（统计藏在这一页里，标签不提就没人知道）
+    NavItem(icon: Icons.check_circle_outline, label: '任务/统计'),
     // 第三格：课表（2026-10-06 顶掉原来的「统计」）
     NavItem(icon: Icons.calendar_month_outlined, label: '课表'),
     NavItem(icon: Icons.person_outline, label: '我的'),

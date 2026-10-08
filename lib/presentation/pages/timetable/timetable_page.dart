@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../core/theme/timetable_palette.dart';
 import '../../../data/repositories/timetable_repository.dart';
+import '../../../domain/remote/remote_config.dart';
 import '../../../domain/timetable/course.dart';
 import '../../../domain/timetable/course_override.dart';
 import '../../providers/timetable_provider.dart';
@@ -114,7 +115,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.section),
           GlassPrimaryButton(
-            label: '导入课表',
+            label: t('导入课表'),
             icon: Icons.add_photo_alternate_outlined,
             accent: scheme.primary,
             onPressed: () => _openImport(context),
@@ -213,7 +214,7 @@ class _ImportedView extends ConsumerWidget {
 
         const SizedBox(height: AppSpacing.item),
         GlassPrimaryButton(
-          label: '重新导入',
+          label: t('重新导入'),
           icon: Icons.refresh_rounded,
           accent: scheme.primary,
           onPressed: () => _openImport(context),

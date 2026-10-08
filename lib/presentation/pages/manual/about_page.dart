@@ -4,8 +4,11 @@ import '../../../core/app_info.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../widgets/ambient_background.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/app_page_route.dart';
 import '../../widgets/glass_primary_button.dart';
 import '../../widgets/pressable.dart';
+import '../../widgets/update_row.dart';
+import '../update/update_page.dart';
 import 'manual_dialog.dart';
 
 /// 「关于」页 —— 从「我的 → 关于」进来。
@@ -13,12 +16,13 @@ import 'manual_dialog.dart';
 /// ## 为什么单独开一页，而不是塞在「我的」里
 ///
 /// 「我的」是"我想干什么"的入口页（见 `ProfilePage` 的注释），
-/// 而"这个 App 是什么、数据去哪了、怎么看说明书"是**看**的东西，
+/// 而"这个 App 是什么、怎么看说明书"是**看**的东西，
 /// 堆在入口页里会把那一页越撑越长。
 ///
-/// 这一页干两件事：
+/// 这一页干三件事：
 ///   1. 说清楚它是什么（名称 / 版本 / 一句话）
 ///   2. 给一个**随时翻手册**的入口（首启那个弹窗之后还能找回来）
+///   3. **检查更新**（2026-10-07 从「我的」挪进来的，见下面的注释）
 ///
 /// ⚠️ 2026-10-07 用户要求：这一页**不再出现**开源协议、数据存储相关的
 /// 字样 —— 以后产品形态可能变（闭源收费 / 数据上传），页面文案只写
@@ -113,6 +117,16 @@ class AboutPage extends StatelessWidget {
                   ),
 
                   const SizedBox(height: AppSpacing.item),
+
+                  // 检查更新：2026-10-07 用户要求从「我的」一级页挪到这里 ——
+                  // 「我的」是"我想干什么"的入口页，而"这个 App 本身有没有新版"
+                  // 属于「关于」的范畴（和版本号挨着才讲得通）
+                  AppCard(
+                    padding: EdgeInsets.zero,
+                    child: UpdateRow(
+                      onTap: () => pushAppPage(context, const UpdatePage()),
+                    ),
+                  ),
 
                   const SizedBox(height: AppSpacing.section),
                   GlassPrimaryButton(

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -10,6 +11,7 @@ import '../../../core/theme/timetable_palette.dart';
 import '../../../data/repositories/timetable_repository.dart';
 import '../../../data/services/image_stitch_service.dart';
 import '../../../data/services/ocr_service.dart';
+import '../../../domain/ocr/half_ocr_merge.dart';
 import '../../../domain/ocr/image_stitcher.dart';
 import '../../../domain/ocr/ocr_result.dart';
 import '../../../domain/ocr/timetable_grid.dart';
@@ -226,7 +228,37 @@ class _ImportTimetablePageState extends ConsumerState<ImportTimetablePage> {
     });
 
     try {
-      final OcrResult result = await _ocr.recognizeFile(stitched.path);
+      // ---- 分别 OCR 两张原图，再按拼接几何合并 ----
+      //
+      // 为什么不是直接 OCR 拼好的那张图：ML Kit 会把整图按长边缩放进模型
+      // 输入尺寸，拼图越高缩放比越小 —— 节次号那种小字号会直接糊掉
+      // （实测 `1`/`6` 整块漏读、`2`→`2。%`、`3`→`3閃8`）。
+      // 分别 OCR 时每张都是原始分辨率，节次号全部认对。
+      // 详见 `domain/ocr/half_ocr_merge.dart`。
+      OcrResult? result;
+      final String? topPath = _topPath;
+      final String? bottomPath = _bottomPath;
+      if (topPath != null && bottomPath != null) {
+        try {
+          final OcrResult topOcr = await _ocr.recognizeFile(topPath);
+          final OcrResult bottomOcr = await _ocr.recognizeFile(bottomPath);
+          result = OcrResult(
+            blocks: mergeHalfOcrBlocks(
+              topBlocks: topOcr.blocks,
+              bottomBlocks: bottomOcr.blocks,
+              dstY: stitched.dstY,
+              srcTop: stitched.srcTop,
+            ),
+            rawText: '${topOcr.rawText}\n${bottomOcr.rawText}',
+          );
+        } catch (e) {
+          // 单张失败不致命：退回整图 OCR，只是质量差一点
+          if (kDebugMode) debugPrint('[OCR] 分半识别失败，退回整图：$e');
+          result = null;
+        }
+      }
+      result ??= await _ocr.recognizeFile(stitched.path);
+
       // 拼图原始像素给几何分析用：课程块的第几节到第几节量自色块，
       // 比文字坐标可信（文字挤在块顶，量不出大块的真实跨度）
       final TimetablePixels? pixels = await _ocr.pixelsOf(stitched.path);

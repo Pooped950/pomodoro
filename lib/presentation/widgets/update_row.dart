@@ -6,7 +6,7 @@ import '../../core/theme/design_tokens.dart';
 import '../providers/update_provider.dart';
 import 'pressable.dart';
 
-/// 「我的」页最下面那一行：检查更新。
+/// 「关于」页里的一行：检查更新。
 ///
 /// ## 三种副标题对应三种状态
 ///   - 还没拿到版本信息 → `当前版本 v2.0.2`
@@ -17,9 +17,12 @@ import 'pressable.dart';
 ///
 /// ## 为什么在这里发静默检查
 ///
-/// 用户能看到这一行的地方就是「我的」页，所以"进页面顺手看一眼有无新版"
+/// 用户能看到这一行的地方就是「关于」页，所以"进页面顺手看一眼有无新版"
 /// 放在这个组件的 initState 最自然。真正的节流在 `UpdateService` 里（10 分钟），
 /// 这里不需要再判一次。
+///
+/// ⚠️ 2026-10-07 用户要求：这一行从「我的」一级页**挪进「关于」二级页** ——
+/// 挪动只改了挂载点，组件本身没变（挂哪儿都能用）。
 class UpdateRow extends ConsumerStatefulWidget {
   const UpdateRow({super.key, this.onTap});
 

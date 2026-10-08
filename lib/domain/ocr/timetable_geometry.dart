@@ -72,6 +72,58 @@ class TimetableGeometry {
     }
     return <int>[best + 1];
   }
+
+  /// 用 OCR 认出来的**节次锚点**校正像素量出的节次行。
+  ///
+  /// ## 为什么必须校正（2026-10-08 真图实测）
+  ///
+  /// 像素扫描把「左栏的暗色簇」当节次行，在真实课表上会出两类错：
+  ///
+  ///   - **假节次行**：课程列的文字左边缘比列边界还靠左（列边界是按粘成
+  ///     一块的表头 `周一 周二` 按字符均分算出来的，实测偏右 ~15px），
+  ///     于是每行课程文字最左边的十几像素落进「左栏」，被当成节次行 ——
+  ///     实测 16 行里 **8 行是假的**
+  ///   - **真节次行被粘连后整块丢掉**：假簇和真节次号挨在一起聚成一个
+  ///     高 62px 的簇，超过 60px 的高度上限被丢弃 —— 11 个真节次行只剩 8 个
+  ///
+  /// 后果是 `medianPitch` 从 126 掉到 54，**每个块的节次范围全错**
+  /// （周一跨 4 门课的一块被算成 1-11 节）。
+  ///
+  /// 节次号是**印在图上的数字**，OCR 认它比认像素簇可信。所以以锚点为准：
+  /// 每个锚点吸附到容差内最近的像素标签，没有就退回锚点自身 ——
+  /// 假簇被丢掉、漏掉的真行由锚点补上，行数正好等于节次数。
+  ///
+  /// ⚠️ 容差用**锚点自己的**间距中位数：像素标签的 pitch 正是被污染的。
+  TimetableGeometry snapToAnchors(List<double> anchorCentersY) {
+    if (anchorCentersY.length < 3 || labelCentersY.isEmpty) return this;
+    final List<double> anchors = List<double>.of(anchorCentersY)..sort();
+    final List<double> gaps = <double>[
+      for (int i = 1; i < anchors.length; i++) anchors[i] - anchors[i - 1],
+    ]..sort();
+    final double pitch = gaps.isEmpty
+        ? 100
+        : gaps[gaps.length ~/ 2].clamp(20, 100000).toDouble();
+    final double tol = pitch * 0.45;
+
+    final List<double> out = <double>[];
+    for (final double a in anchors) {
+      double best = a;
+      double bestDist = tol;
+      for (final double y in labelCentersY) {
+        final double d = (y - a).abs();
+        if (d < bestDist) {
+          bestDist = d;
+          best = y;
+        }
+      }
+      // 吸附后必须严格递增，否则节次号会反
+      if (out.isNotEmpty && best <= out.last) best = a;
+      if (out.isNotEmpty && best <= out.last) continue;
+      out.add(best);
+    }
+    if (out.length < 2) return this;
+    return TimetableGeometry(labelCentersY: out, blocks: blocks);
+  }
 }
 
 /// 一节课列的 x 范围（从 OCR 星期表头算出来，原样传给扫描器）
@@ -83,6 +135,20 @@ class GeometryBand {
   final double right;
 }
 
+/// 块内的一条**底色变化线**：[y] 是位置，[strength] 是两侧底色的最大通道差。
+///
+/// 强度越大越可信：真边界实测 10~18，文字抗锯齿蹭出来的假边界只有 8~10。
+@immutable
+class ColorEdge {
+  const ColorEdge(this.y, this.strength);
+
+  final double y;
+  final int strength;
+
+  @override
+  String toString() => 'ColorEdge(${y.round()}, $strength)';
+}
+
 /// 一个课程色块（只有几何，没有文字）
 @immutable
 class GeometryBlock {
@@ -91,12 +157,24 @@ class GeometryBlock {
     required this.top,
     required this.right,
     required this.bottom,
+    this.colorEdges = const <ColorEdge>[],
   });
 
   final double left;
   final double top;
   final double right;
   final double bottom;
+
+  /// 块内**底色变化线**（按 y 升序）。
+  ///
+  /// 同一列相邻两门课**可以紧挨着没有白缝**，但 App 会给每门课一个底色，
+  /// 所以底色变化处就是课与课的分界（实测：周一 粉`#fbe5e7`→米黄`#fef3df`→
+  /// 浅黄`#ffffde`；周四 黄→粉→紫）。
+  ///
+  /// ⚠️ 只在块内相邻行之间找，**不是**把整列按色差切块 —— 那样会碎成
+  /// 几十个小块（见 2026-10-07 的教训）。这里只输出"哪儿变色"，
+  /// 由调用方决定要不要在文字间隙处用它当切点。
+  final List<ColorEdge> colorEdges;
 
   double get centerX => (left + right) / 2;
   double get centerY => (top + bottom) / 2;
@@ -106,9 +184,26 @@ class GeometryBlock {
 
 /// 节次栏标签的识别参数（都是从真图量出来的经验值，理由见各处注释）
 abstract final class TimetableGeometryScanner {
-  /// 「这是课程块的颜色」：饱和度超过它（0~255 差值）。
-  /// 块底色是柔和的彩色（米黄/粉/绿/蓝），白底和灰网格线的 RGB 差接近 0。
-  static const int _blockSaturation = 30;
+  /// 「这是课程块的颜色」：饱和度（RGB 极差）超过它。
+  ///
+  /// ## ⚠️ 这个值必须按**最淡的一款配色**定（2026-10-07 真机实测）
+  ///
+  /// 一开始按另一款 App 的配色调成 30，结果换一款 App 就**只认出 1 个色块**、
+  /// 整张课表只剩 1 格。采样真实像素后发现根因：
+  ///
+  /// | 像素 | 实测饱和度 |
+  /// |---|---|
+  /// | 白底 `#ffffff` / 网格线 `#f1f1f1` / 黑字 | **0 ~ 4** |
+  /// | 课程块（淡黄 `#fafee5` / 淡紫 `#f6e4fc` / 淡绿 `#e8fdea`） | **21 ~ 30** |
+  /// | 课程块（粉 `#ffd0cc` / 蓝 `#cae9fd`） | 40 ~ 104 |
+  ///
+  /// 也就是说：**底色越淡的 App，块和背景的差距越小**。30 这个值把
+  /// 21~30 那一档全部误判成背景了。
+  ///
+  /// 取 12：非块像素实测上限是 4，留 3 倍余量；同时能覆盖 21 那一档。
+  /// 换更淡的配色时这个值还要往下调 —— 判据的本质是"和背景有一点点色偏"，
+  /// 不是"颜色鲜艳"。
+  static const int _blockSaturation = 12;
 
   /// **强行**：块身行。白字行占不满横向跨度、悬浮箭头（蓝圆，只占
   /// 列宽 ~40%）不够格，只有块身能同时过这两关 —— 见扫描处的说明。
@@ -221,6 +316,16 @@ abstract final class TimetableGeometryScanner {
         List<List<double>>.generate(bands.length, (_) => List<double>.filled(scanRows, 0));
     final List<List<double>> bandSpans =
         List<List<double>>.generate(bands.length, (_) => List<double>.filled(scanRows, 0));
+    // 每行的**块身底色**（只统计有色采样点，文字/白缝都不参与）——
+    // 用来找块内底色变化点（= 相邻两门课的分界）
+    final List<List<int>> bandR =
+        List<List<int>>.generate(bands.length, (_) => List<int>.filled(scanRows, 0));
+    final List<List<int>> bandG =
+        List<List<int>>.generate(bands.length, (_) => List<int>.filled(scanRows, 0));
+    final List<List<int>> bandB =
+        List<List<int>>.generate(bands.length, (_) => List<int>.filled(scanRows, 0));
+    final List<List<int>> bandN =
+        List<List<int>>.generate(bands.length, (_) => List<int>.filled(scanRows, 0));
     for (int bi = 0; bi < bands.length; bi++) {
       final GeometryBand band = bands[bi];
       final double cx0 = band.left + 6;
@@ -228,7 +333,10 @@ abstract final class TimetableGeometryScanner {
       if (cx1 <= cx0) continue;
       final int sampleStep = ((cx1 - cx0) / 40).ceil().clamp(1, 20);
       final int sampleCount = ((cx1 - cx0) / sampleStep).ceil();
+      // 复用缓冲：本行"有色且不暗"的采样点（打包成 lum<<24|r<<16|g<<8|b）
+      final List<int> buf = <int>[];
       for (int y = yLo; y < yHi; y++) {
+        buf.clear();
         int colored = 0;
         int minC = -1, maxC = -1;
         final int base = y * width * 4;
@@ -246,10 +354,40 @@ abstract final class TimetableGeometryScanner {
             if (minC < 0) minC = s;
             maxC = s;
           }
+          if (mx - mn >= _blockSaturation && (r + g + b) >= 510) {
+            buf.add((((r * 299 + g * 587 + b * 114) ~/ 1000) << 24) |
+                (r << 16) |
+                (g << 8) |
+                b);
+          }
         }
         bandFracs[bi][y - yLo] = colored / sampleCount;
         bandSpans[bi][y - yLo] =
             minC < 0 ? 0 : (maxC - minC + 1) / sampleCount;
+        // 底色 = 本行**最亮的那批**有色像素的平均。
+        // ⚠️ 不能用全部有色像素的平均：文字的抗锯齿边缘也"有色"
+        // （`#7f7170` 饱和度 15），只占 2% 就能把均值拉暗 7 以上 ——
+        // 和真实的两块底色差（12~13）同量级，会造出一堆假边界。
+        // 底色是块里最亮的颜色，取"离最亮 6 以内"的那批就干净了。
+        int sr = 0, sg = 0, sb = 0, sn = 0;
+        if (buf.isNotEmpty) {
+          int maxLum = 0;
+          for (final int v in buf) {
+            final int l = v >>> 24;
+            if (l > maxLum) maxLum = l;
+          }
+          for (final int v in buf) {
+            if ((v >>> 24) < maxLum - 6) continue;
+            sr += (v >> 16) & 0xFF;
+            sg += (v >> 8) & 0xFF;
+            sb += v & 0xFF;
+            sn++;
+          }
+        }
+        bandR[bi][y - yLo] = sr;
+        bandG[bi][y - yLo] = sg;
+        bandB[bi][y - yLo] = sb;
+        bandN[bi][y - yLo] = sn;
       }
     }
 
@@ -304,6 +442,10 @@ abstract final class TimetableGeometryScanner {
           top: extTop.toDouble(),
           right: band.right,
           bottom: extBottom.toDouble(),
+          colorEdges: _colorEdgesIn(
+            bandR[bi], bandG[bi], bandB[bi], bandN[bi], fracs, yLo, extTop,
+            extBottom,
+          ),
         ));
       }
 
@@ -341,5 +483,79 @@ abstract final class TimetableGeometryScanner {
       for (int i = 1; i < labels.length; i++) labels[i] - labels[i - 1],
     ]..sort();
     return gaps[gaps.length ~/ 2];
+  }
+
+  /// 块内**底色变化点**的 y（升序）。见 [GeometryBlock.colorEdges]。
+  ///
+  /// 比较的是「前后各 ~16px 处的底色平均」而不是单行 —— 单行会被抗锯齿
+  /// 噪声骗。
+  ///
+  /// ⚠️ 底色只统计**纯块身行**（彩色占比 ≥ 0.9，即这一行没有文字）：
+  /// 文字行的抗锯齿边缘会把底色拉暗，实测能拉出 14 的假色差 ——
+  /// 和真实的两块底色差（12~13）一样大，不加这道闸全是假边界。
+  ///
+  /// 阈值 7：实测相邻两门课的底色最大通道差是 12~13（粉 vs 米黄 13、
+  /// 米黄 vs 浅黄 12、黄 vs 粉 13），纯块身行的波动 ≤ 2。
+  static List<ColorEdge> _colorEdgesIn(
+    List<int> rowR,
+    List<int> rowG,
+    List<int> rowB,
+    List<int> rowN,
+    List<double> fracs,
+    int yLo,
+    int extTop,
+    int extBottom,
+  ) {
+    (int, int, int)? colorNear(int y) {
+      int sr = 0, sg = 0, sb = 0, n = 0;
+      for (int yy = y - 12; yy <= y + 12; yy++) {
+        final int i = yy - yLo;
+        if (i < 0 || i >= rowN.length || rowN[i] == 0) continue;
+        if (fracs[i] < 0.9) continue; // 有文字的行不参与
+        // rowR/G/B 存的是该行所有有色采样点的**和**，先折回均值再跨行平均
+        sr += rowR[i] ~/ rowN[i];
+        sg += rowG[i] ~/ rowN[i];
+        sb += rowB[i] ~/ rowN[i];
+        n++;
+      }
+      if (n < 3) return null;
+      return (sr ~/ n, sg ~/ n, sb ~/ n);
+    }
+
+    int diff((int, int, int) a, (int, int, int) b) {
+      final int dr = (a.$1 - b.$1).abs();
+      final int dg = (a.$2 - b.$2).abs();
+      final int db = (a.$3 - b.$3).abs();
+      return dr > dg ? (dr > db ? dr : db) : (dg > db ? dg : db);
+    }
+
+    final List<ColorEdge> edges = <ColorEdge>[];
+    int runStart = -1;
+    int bestY = -1;
+    int bestDiff = 0;
+    void flushRun() {
+      if (runStart < 0 || bestY < 0) return;
+      edges.add(ColorEdge(bestY.toDouble(), bestDiff));
+      runStart = -1;
+      bestY = -1;
+      bestDiff = 0;
+    }
+
+    for (int y = extTop + 16; y <= extBottom - 16; y += 2) {
+      final (int, int, int)? a = colorNear(y - 16);
+      final (int, int, int)? b = colorNear(y + 16);
+      final int d = (a == null || b == null) ? 0 : diff(a, b);
+      if (d > 7) {
+        if (runStart < 0) runStart = y;
+        if (d > bestDiff) {
+          bestDiff = d;
+          bestY = y;
+        }
+      } else {
+        flushRun();
+      }
+    }
+    flushRun();
+    return edges;
   }
 }

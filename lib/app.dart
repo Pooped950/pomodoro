@@ -6,15 +6,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/theme/app_theme.dart';
 import 'data/services/keepalive_service.dart';
+import 'domain/remote/remote_config.dart';
 import 'presentation/pages/shell/app_shell.dart';
 import 'presentation/providers/app_settings_provider.dart';
+import 'presentation/providers/remote_config_provider.dart';
 import 'presentation/providers/timer_provider.dart';
 import 'presentation/widgets/motion_scope.dart';
 
 /// 应用根组件
 ///
-/// 动态取色（方案 6.5④）：优先使用系统壁纸提取的主题色（HyperOS 支持
-/// Material You），拿不到时回退到内置番茄红。
+/// 主题色：**默认番茄红/橙**（品牌色，App 就叫「一颗番茄」）。
+/// 设置里打开「跟随系统取色」后才走动态取色（方案 6.5④，HyperOS 的
+/// Material You）—— 默认关是因为跟随壁纸会让主题色跟机型跑，
+/// 品牌感没了（2026-10-08 用户定的）。
 class PomodoroApp extends ConsumerWidget {
   const PomodoroApp({super.key});
 
@@ -22,6 +26,17 @@ class PomodoroApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // 主题模式来自设置（M4 外观），改了立即生效并落库
     final ThemeMode themeMode = ref.watch(appThemeModeProvider).themeMode;
+    // 是否跟随系统壁纸取色（默认 false → 品牌色）
+    final bool followWallpaper = ref.watch(dynamicColorProvider);
+
+    // 品牌主色：**远程配置可以改**（推一份 remote_config.json 即生效，不用发版）；
+    // 拉不到 / 没配就用代码里的番茄红。
+    // watch 这个 provider 是为了配置到达后能重建整棵树（配色 + 文案一起刷新）。
+    final RemoteConfig? remoteCfg = ref.watch(remoteConfigProvider);
+    final int? remoteSeed =
+        parseHexColor(remoteCfg?.seedColorHex ?? remoteSeedColorHex);
+    final Color brandSeed =
+        remoteSeed == null ? AppTheme.seed : Color(remoteSeed);
 
     // 动效节奏（设置里的滑动条）。在这里换算成最终时长并注入整棵树，
     // 之后任何组件都用 `MotionScope.of(context)` 取，不再各算各的。
@@ -32,29 +47,45 @@ class PomodoroApp extends ConsumerWidget {
 
     return MotionScope(
       motion: motion,
-      child: DynamicColorBuilder(
-        builder: (lightDynamic, darkDynamic) {
-          // dynamic_color 2.x 给出的 ColorScheme 来自 material_ui 包，
-          // 与 Flutter 自家的 ColorScheme 不是同一个类，无法直接传入主题。
-          // 因此只取壁纸提取出的主色作为种子，用 Flutter 自己的
-          // ColorScheme.fromSeed 重新生成完整方案 —— 视觉上依然"跟随壁纸"。
-          final Color lightSeed = lightDynamic?.primary ?? AppTheme.seed;
-          final Color darkSeed = darkDynamic?.primary ?? AppTheme.seed;
-          return MaterialApp(
-            title: '一颗番茄',
-            debugShowCheckedModeBanner: false,
-            theme: AppTheme.from(ColorScheme.fromSeed(seedColor: lightSeed)),
-            darkTheme: AppTheme.from(
-              ColorScheme.fromSeed(
-                seedColor: darkSeed,
-                brightness: Brightness.dark,
-              ),
+      child: followWallpaper
+          ? DynamicColorBuilder(
+              builder: (lightDynamic, darkDynamic) {
+                // dynamic_color 2.x 给出的 ColorScheme 来自 material_ui 包，
+                // 与 Flutter 自家的 ColorScheme 不是同一个类，无法直接传入主题。
+                // 因此只取壁纸提取出的主色作为种子，用 Flutter 自己的
+                // ColorScheme.fromSeed 重新生成完整方案 —— 视觉上依然"跟随壁纸"。
+                return _buildApp(
+                  lightSeed: lightDynamic?.primary ?? brandSeed,
+                  darkSeed: darkDynamic?.primary ?? brandSeed,
+                  themeMode: themeMode,
+                );
+              },
+            )
+          : _buildApp(
+              lightSeed: brandSeed,
+              darkSeed: brandSeed,
+              themeMode: themeMode,
             ),
-            themeMode: themeMode,
-            home: const _LayoutProbe(child: _LifecycleScope(child: AppShell())),
-          );
-        },
+    );
+  }
+
+  Widget _buildApp({
+    required Color lightSeed,
+    required Color darkSeed,
+    required ThemeMode themeMode,
+  }) {
+    return MaterialApp(
+      title: '一颗番茄',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.from(ColorScheme.fromSeed(seedColor: lightSeed)),
+      darkTheme: AppTheme.from(
+        ColorScheme.fromSeed(
+          seedColor: darkSeed,
+          brightness: Brightness.dark,
+        ),
       ),
+      themeMode: themeMode,
+      home: const _LayoutProbe(child: _LifecycleScope(child: AppShell())),
     );
   }
 }

@@ -66,6 +66,58 @@ final appThemeModeProvider =
   AppThemeModeNotifier.new,
 );
 
+/// 是否跟随系统壁纸取主题色（Material You）。
+///
+/// ## 为什么**默认关**（2026-10-08 用户定的）
+///
+/// App 叫「一颗番茄」，品牌色就是番茄红/橙。跟随壁纸取色的话，主题色会变成
+/// 壁纸的色 —— 品牌感没了，而且**同一张课表截图在不同手机上颜色还不一样**
+/// （UI 截图核对时对不上）。所以默认固定番茄红，想跟随壁纸的用户自己去
+/// 「设置 → 外观」打开。
+class DynamicColorNotifier extends Notifier<bool> {
+  @override
+  bool build() {
+    unawaited(_restore());
+    return false;
+  }
+
+  Future<void> _restore() async {
+    try {
+      final String? saved = await ref
+          .read(settingsRepositoryProvider)
+          .readString(SettingsRepository.keyDynamicColor);
+      if (saved == null) return;
+      // 用户在读取完成前已经点过了 → 别用库里的旧值覆盖
+      if (state != false) return;
+      state = saved == 'true';
+    } catch (_) {
+      // 仓库未注入（测试环境）/ 读取失败 → 用默认值，不阻塞启动
+    }
+  }
+
+  void set(bool enabled) {
+    if (enabled == state) return;
+    state = enabled;
+    unawaited(_persist(enabled));
+  }
+
+  Future<void> _persist(bool enabled) async {
+    try {
+      await ref.read(settingsRepositoryProvider).writeString(
+            SettingsRepository.keyDynamicColor,
+            enabled ? 'true' : 'false',
+          );
+    } on UnimplementedError {
+      // provider 未注入（纯逻辑测试环境）
+    } catch (_) {
+      // 落盘失败不拖垮界面
+    }
+  }
+}
+
+final dynamicColorProvider =
+    NotifierProvider<DynamicColorNotifier, bool>(DynamicColorNotifier.new);
+
 /// 到点提醒设置：启动读库、改动落库。
 ///
 /// 注意：这两个开关**只影响响铃/震动**，不影响精确闹钟的排程 ——

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/design_tokens.dart';
+import '../../../domain/remote/remote_config.dart';
 import '../../../domain/settings/app_theme_mode.dart';
 import '../../../domain/settings/motion_settings.dart';
 import '../../../domain/settings/reminder_settings.dart';
@@ -136,10 +137,20 @@ class SettingsDetailPage extends ConsumerWidget {
                   const SizedBox(height: AppSpacing.section),
                   const _SectionLabel('外观'),
                   AppCard(
-                    child: _ThemeModeRow(
-                      value: ref.watch(appThemeModeProvider),
-                      onChanged: (AppThemeMode m) =>
-                          ref.read(appThemeModeProvider.notifier).set(m),
+                    child: Column(
+                      children: <Widget>[
+                        _ThemeModeRow(
+                          value: ref.watch(appThemeModeProvider),
+                          onChanged: (AppThemeMode m) =>
+                              ref.read(appThemeModeProvider.notifier).set(m),
+                        ),
+                        const Divider(height: 1, indent: AppSpacing.item, endIndent: AppSpacing.item),
+                        _DynamicColorRow(
+                          value: ref.watch(dynamicColorProvider),
+                          onChanged: (bool v) =>
+                              ref.read(dynamicColorProvider.notifier).set(v),
+                        ),
+                      ],
                     ),
                   ),
 
@@ -203,7 +214,7 @@ class _Header extends StatelessWidget {
           icon: const Icon(Icons.arrow_back_rounded),
           tooltip: '返回',
         ),
-        Expanded(child: Text('设置', style: text.titleLarge)),
+        Expanded(child: Text(t('设置'), style: text.titleLarge)),
       ],
     );
   }
@@ -273,6 +284,36 @@ class _ThemeModeRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 「跟随系统取色」行：开关。
+///
+/// 默认**关** —— App 叫「一颗番茄」，品牌色就是番茄红/橙。打开后主题色跟着
+/// 系统壁纸走（Material You），但同一张截图在不同手机上颜色会不一样。
+class _DynamicColorRow extends StatelessWidget {
+  const _DynamicColorRow({required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme text = Theme.of(context).textTheme;
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+
+    return SwitchListTile(
+      value: value,
+      onChanged: onChanged,
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.item),
+      title: Text('跟随系统取色', style: text.bodyMedium),
+      subtitle: Text(
+        value ? '主题色跟着系统壁纸走' : '主题色固定为番茄红',
+        style: text.bodySmall?.copyWith(
+          color: scheme.onSurface.withValues(alpha: 0.5),
+        ),
       ),
     );
   }

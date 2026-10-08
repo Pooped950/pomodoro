@@ -8,7 +8,9 @@ import 'data/repositories/settings_repository.dart';
 import 'data/repositories/task_repository.dart';
 import 'data/repositories/timer_snapshot_repository.dart';
 import 'data/repositories/timetable_repository.dart';
+import 'data/services/remote_config_service.dart';
 import 'data/services/update_service.dart';
+import 'presentation/providers/remote_config_provider.dart';
 import 'presentation/providers/update_provider.dart';
 
 Future<void> main() async {
@@ -35,6 +37,10 @@ Future<void> main() async {
       // 检查更新：读远端 version.json + 缓存（复用同一份设置表）
       updateServiceProvider.overrideWithValue(
         UpdateService(store: SettingsUpdateStore(settings)),
+      ),
+      // 远程配置：课表识别规则 / 品牌配色 / 界面文案 —— 免安装生效
+      remoteConfigServiceProvider.overrideWithValue(
+        RemoteConfigService(store: SettingsUpdateStore(settings)),
       ),
     ],
     child: const PomodoroApp(),
