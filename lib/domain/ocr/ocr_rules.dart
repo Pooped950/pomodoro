@@ -38,7 +38,7 @@ class OcrRules {
   /// 简体课表里根本不会用「後」）。
   final String misreadAlways;
 
-  /// **后面紧跟数字**才算误认的字（`数222` = `教222`、`北数-102` = `北教-102`）。
+  /// **后面紧跟数字**才算误认的字（`数301` = `教301`、`北数-102` = `北教-102`）。
   /// 必须带数字：`数学分析` / `数据结构` 里也有这些字。
   final String misreadBeforeDigit;
 
@@ -68,7 +68,7 @@ class OcrRules {
     return _roomPatternCache!;
   }
 
-  /// 「误认字 + 数字」正则（`数222` / `北数-102` / `敦222`）
+  /// 「误认字 + 数字」正则（`数301` / `北数-102` / `敦222`）
   RegExp get misreadDigitPattern =>
       RegExp('[${RegExp.escape(misreadBeforeDigit)}][^\\d]{0,2}\\d');
 
