@@ -9,6 +9,7 @@ import 'data/services/keepalive_service.dart';
 import 'domain/remote/remote_config.dart';
 import 'presentation/pages/shell/app_shell.dart';
 import 'presentation/providers/app_settings_provider.dart';
+import 'presentation/providers/class_reminder_provider.dart';
 import 'presentation/providers/remote_config_provider.dart';
 import 'presentation/providers/timer_provider.dart';
 import 'presentation/widgets/motion_scope.dart';
@@ -37,6 +38,10 @@ class PomodoroApp extends ConsumerWidget {
         parseHexColor(remoteCfg?.seedColorHex ?? remoteSeedColorHex);
     final Color brandSeed =
         remoteSeed == null ? AppTheme.seed : Color(remoteSeed);
+
+    // 上课提醒：挂一个监听，课表一变就重排（导入 / 改课 / 改节次时间都覆盖到）。
+    // 这里 watch 一下即可 —— provider 本身没有值，只是把副作用挂上去。
+    ref.watch(classReminderSyncProvider);
 
     // 动效节奏（设置里的滑动条）。在这里换算成最终时长并注入整棵树，
     // 之后任何组件都用 `MotionScope.of(context)` 取，不再各算各的。

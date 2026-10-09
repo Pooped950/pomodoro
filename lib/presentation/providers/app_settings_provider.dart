@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/repositories/settings_repository.dart';
 import '../../domain/settings/app_theme_mode.dart';
 import '../../domain/settings/background_settings.dart';
+import '../../domain/settings/class_reminder_settings.dart';
 import '../../domain/settings/motion_settings.dart';
 import '../../domain/settings/reminder_settings.dart';
 
@@ -121,6 +122,61 @@ class DynamicColorNotifier extends Notifier<bool> {
 
 final dynamicColorProvider =
     NotifierProvider<DynamicColorNotifier, bool>(DynamicColorNotifier.new);
+
+/// 上课提醒方式（震动 / 响铃，两个都关 = 不提醒）。**默认都开**。
+///
+/// ⚠️ 和番茄钟的 [ReminderSettings] 语义不同：那边"关掉"只是静默、通知照出；
+/// 这边两个都关是**真的不提醒**（[classReminderSyncProvider] 会把原生侧
+/// 已排的闹钟全部取消）—— 上课提醒响在教室里，用户要能彻底关掉。
+class ClassReminderSettingsNotifier extends Notifier<ClassReminderSettings> {
+  @override
+  ClassReminderSettings build() {
+    unawaited(_restore());
+    return const ClassReminderSettings();
+  }
+
+  Future<void> _restore() async {
+    try {
+      final Map<String, Object?>? saved = await ref
+          .read(settingsRepositoryProvider)
+          .readJson(SettingsRepository.keyClassReminder);
+      if (saved == null) return;
+      // 用户在读取完成前已经点过了 → 别用库里的旧值覆盖
+      if (state != const ClassReminderSettings()) return;
+      state = ClassReminderSettings.fromJson(saved);
+    } catch (_) {
+      // 仓库未注入（测试环境）/ 读取失败 → 用默认值
+    }
+  }
+
+  void setVibrate(bool value) => _set(state.copyWith(vibrate: value));
+
+  void setSound(bool value) => _set(state.copyWith(sound: value));
+
+  void _set(ClassReminderSettings next) {
+    if (next == state) return;
+    state = next;
+    unawaited(_persist(next));
+  }
+
+  Future<void> _persist(ClassReminderSettings s) async {
+    try {
+      await ref.read(settingsRepositoryProvider).writeJson(
+            SettingsRepository.keyClassReminder,
+            s.toJson(),
+          );
+    } on UnimplementedError {
+      // provider 未注入（纯逻辑测试环境）
+    } catch (_) {
+      // 落盘失败不拖垮界面
+    }
+  }
+}
+
+final classReminderSettingsProvider =
+    NotifierProvider<ClassReminderSettingsNotifier, ClassReminderSettings>(
+  ClassReminderSettingsNotifier.new,
+);
 
 /// 到点提醒设置：启动读库、改动落库。
 ///

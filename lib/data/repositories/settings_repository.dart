@@ -24,6 +24,12 @@ class SettingsRepository {
   /// [DynamicColorNotifier] 的注释（品牌色是番茄红/橙，不跟壁纸跑）。
   static const String keyDynamicColor = 'dynamic_color';
 
+  /// 上课提醒方式（震动 / 响铃）—— 存 JSON `{vibrate, sound}`。
+  ///
+  /// ⚠️ 和番茄钟的 `keyReminder` **分开存**：用户可以只要番茄钟响、
+  /// 上课不响（或者反过来）。两个都关 = 不提醒。
+  static const String keyClassReminder = 'class_reminder';
+
   /// 远程配置（`remote_config.json`）原文缓存 —— 拉不到时用上次那份
   static const String keyRemoteConfig = 'remote_config';
 

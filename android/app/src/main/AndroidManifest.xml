@@ -56,6 +56,12 @@
         <receiver
             android:name=".TimerAlarmReceiver"
             android:exported="false" />
+        <!-- 上课提醒：闹钟到点由它发通知 + 排下一周的同一次。
+             自包含（规则存在 SharedPreferences），**不依赖 App 进程存活**。
+             exported=false：只有本应用的 PendingIntent 能触发它。 -->
+        <receiver
+            android:name=".ClassAlarmReceiver"
+            android:exported="false" />
         <!-- 检查更新：把 cache/updates 下的 APK 通过 FileProvider 交给系统安装器。
              authorities 用 applicationId 拼，以后换包名不用改这里 -->
         <provider

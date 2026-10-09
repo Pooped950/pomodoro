@@ -66,6 +66,7 @@ class MainActivity : FlutterActivity() {
 
     private var keepAliveChannel: MethodChannel? = null
     private var installerChannel: MethodChannel? = null
+    private var classReminderChannel: MethodChannel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -186,6 +187,38 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // ---- 上课提醒：把「每周几、几点、提醒哪门课」的规则交给原生排程 ----
+        //
+        // 为什么不传绝对时间戳：课表是每周重复的。传规则 → 原生每次响完自己排
+        // 下一周的同一次，**App 一直不打开也能一直提醒**（见 ClassReminderScheduler）。
+        val classes = MethodChannel(messenger, "pomodoro/classReminder")
+        classReminderChannel = classes
+        classes.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "apply" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val json = args?.get("items") as? String
+                    if (json == null) {
+                        result.error("bad_args", "items 必须是 JSON 字符串", null)
+                    } else {
+                        // 提醒方式：震动 / 响铃 / 两者（两个都关时 Dart 侧不会调到这里）
+                        val vibrate = args["vibrate"] as? Boolean ?: true
+                        val sound = args["sound"] as? Boolean ?: true
+                        ClassReminderScheduler.apply(this, json, vibrate, sound)
+                        result.success(ClassReminderScheduler.load(this).size)
+                    }
+                }
+                "clear" -> {
+                    ClassReminderScheduler.clear(this)
+                    result.success(null)
+                }
+                "count" -> result.success(ClassReminderScheduler.load(this).size)
+                "canScheduleExact" -> result.success(canScheduleExactAlarms())
+                "openExactAlarmSettings" -> result.success(openExactAlarmSettings())
+                else -> result.notImplemented()
+            }
+        }
+
         // ---- 检查更新：调起系统安装器 ----
         // 第三方 App 不能静默装包，这里只做三件事：查权限 / 跳授权页 / 拉起安装器
         val installer = MethodChannel(messenger, "pomodoro/installer")
@@ -271,6 +304,37 @@ class MainActivity : FlutterActivity() {
         return try {
             startActivity(
                 Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 能不能排**精确**闹钟（上课提醒用）。
+     *
+     * Android 13+ 我们声明了 `USE_EXACT_ALARM`（闹钟类应用专用），装上就自动有；
+     * Android 12 只能用 `SCHEDULE_EXACT_ALARM`，那个要用户去系统设置里开。
+     * 拿不到时 [ClassReminderScheduler.scheduleOne] 会自动降级成不精确闹钟
+     * （可能晚几分钟），所以这里返回 false 不是错误，只是提示用户去开。
+     */
+    private fun canScheduleExactAlarms(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (getSystemService(ALARM_SERVICE) as? android.app.AlarmManager)
+                ?.canScheduleExactAlarms() ?: false
+        } else {
+            true
+        }
+
+    /** 跳到系统的「闹钟与提醒」授权页（Android 12 需要） */
+    private fun openExactAlarmSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        return try {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                    .setData(Uri.fromParts("package", packageName, null))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
             true

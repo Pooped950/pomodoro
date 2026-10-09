@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/design_tokens.dart';
 import '../../../domain/remote/remote_config.dart';
 import '../../../domain/settings/app_theme_mode.dart';
+import '../../../domain/settings/class_reminder_settings.dart';
 import '../../../domain/settings/motion_settings.dart';
 import '../../../domain/settings/reminder_settings.dart';
 import '../../../domain/timer/timer_engine.dart';
@@ -33,6 +34,8 @@ class SettingsDetailPage extends ConsumerWidget {
     final ReminderSettings reminder = ref.watch(reminderSettingsProvider);
     final ReminderSettingsNotifier reminderNotifier =
         ref.read(reminderSettingsProvider.notifier);
+    final ClassReminderSettings classReminder =
+        ref.watch(classReminderSettingsProvider);
     final TextTheme text = Theme.of(context).textTheme;
 
     return Scaffold(
@@ -129,6 +132,34 @@ class SettingsDetailPage extends ConsumerWidget {
                           // 总开关关掉时这一项没有意义，置灰
                           enabled: reminder.soundEnabled,
                           onChanged: reminderNotifier.setVibrateEnabled,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: AppSpacing.section),
+                  const _SectionLabel('课表'),
+                  AppCard(
+                    padding: EdgeInsets.zero,
+                    child: Column(
+                      children: <Widget>[
+                        _SwitchRow(
+                          label: '上课提醒',
+                          // 说清"什么时候排的" —— 用户会问"我导入了怎么没响"
+                          subtitle: '每节课上课前 10 分钟提醒（导入课表后自动排好）',
+                          value: classReminder.vibrate,
+                          onChanged: (bool v) => ref
+                              .read(classReminderSettingsProvider.notifier)
+                              .setVibrate(v),
+                        ),
+                        const _RowDivider(),
+                        _SwitchRow(
+                          label: '响铃',
+                          subtitle: '关掉就只震动，不响铃',
+                          value: classReminder.sound,
+                          onChanged: (bool v) => ref
+                              .read(classReminderSettingsProvider.notifier)
+                              .setSound(v),
                         ),
                       ],
                     ),
