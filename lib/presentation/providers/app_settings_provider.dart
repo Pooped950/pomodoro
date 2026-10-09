@@ -20,11 +20,14 @@ extension AppThemeModeX on AppThemeMode {
 }
 
 /// 主题模式：启动读库、改动落库（与 TimerConfig 同一套 settings 表）。
+///
+/// ⚠️ **默认深色**（2026-10-09 用户要求）：品牌色是番茄红/橙，深底上更出彩；
+/// 浅色底反而显得发白。想跟随系统或固定浅色的，去「设置 → 外观」改。
 class AppThemeModeNotifier extends Notifier<AppThemeMode> {
   @override
   AppThemeMode build() {
     unawaited(_restore());
-    return AppThemeMode.system;
+    return AppThemeMode.dark;
   }
 
   Future<void> _restore() async {
@@ -34,7 +37,8 @@ class AppThemeModeNotifier extends Notifier<AppThemeMode> {
           .readString(SettingsRepository.keyThemeMode);
       if (saved == null) return;
       // 用户在读取完成前已经点过了 → 别用库里的旧值覆盖
-      if (state != AppThemeMode.system) return;
+      // （守卫值必须跟 build() 的默认值一致，否则预热会把用户的选择冲掉）
+      if (state != AppThemeMode.dark) return;
       state = AppThemeMode.fromName(saved);
     } catch (_) {
       // 仓库未注入（测试环境）/ 读取失败 → 用默认值，不阻塞启动

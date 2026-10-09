@@ -11,11 +11,11 @@ void main() {
       expect(AppThemeMode.fromName('dark'), AppThemeMode.dark);
     });
 
-    test('★ 未知 / null / 空串 / 大小写不符 一律回退 system，不抛异常', () {
-      expect(AppThemeMode.fromName(null), AppThemeMode.system);
-      expect(AppThemeMode.fromName(''), AppThemeMode.system);
-      expect(AppThemeMode.fromName('Dark'), AppThemeMode.system);
-      expect(AppThemeMode.fromName('{"a":1}'), AppThemeMode.system);
+    test('★ 未知 / null / 空串 / 大小写不符 一律回退默认值（dark），不抛异常', () {
+      expect(AppThemeMode.fromName(null), AppThemeMode.dark);
+      expect(AppThemeMode.fromName(''), AppThemeMode.dark);
+      expect(AppThemeMode.fromName('Dark'), AppThemeMode.dark);
+      expect(AppThemeMode.fromName('{"a":1}'), AppThemeMode.dark);
     });
 
     test('name 与 label 都非空（name 用于落库，label 用于界面）', () {
