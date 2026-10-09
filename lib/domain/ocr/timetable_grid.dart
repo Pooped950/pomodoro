@@ -201,13 +201,143 @@ int _denseIndex(String s, int index) {
 }
 
 /// 这一行像不像「星期表头」：剥掉行首噪声后必须以 `周X` 开头
+/// 这个 token 是**带结构的**日期（`10/9`、`10月9日`、`2026-10-09`），
+/// 而不是光秃秃的日号（`9`）。
+///
+/// 用途：区分「课程区里的裸数字」和「节次栏的裸数字」——
+/// 前者可能是日期行被拆散的碎片，后者是节次号，要排除。
+bool _hasDateStructure(String raw) {
+  final String s = _stripLeadNoise(raw).replaceAll(RegExp(r'\s+'), '');
+  return s.contains('/') ||
+      s.contains('-') ||
+      s.contains('.') ||
+      s.contains('月') ||
+      s.contains('日') ||
+      s.contains('号') ||
+      RegExp(r'^\d{4}').hasMatch(s);
+}
+
+/// 「这一行像不像一个日期」—— 表头下方那一排日期的**写法极其不统一**。
+///
+/// ## 为什么要认这么多写法（2026-10-09 用户明确要求）
+///
+/// 同一个日期在不同 App / 学校 / 手抄里能写出十几种样子：
+///
+/// | 形态 | 例子 |
+/// |---|---|
+/// | 数字 + 各种分隔符 | `10/9`、`10-9`、`10.9`、`10、9`、`10\9` |
+/// | 中文月日 | `10月9日`、`10月9号`、`10月09日` |
+/// | 中文数字 | `10月九日`、`九月九号`、`九月九日` |
+/// | 只写日号 | `9`、`09`、`9日`、`9号`、`九日` |
+/// | 完整日期 | `2026-10-09`、`2026/10/9` |
+///
+/// **只认其中一种的代价**（2026-10-09 真机实测踩到）：表头下方那排日期
+/// 整排提不到 → 裸表头兜底失去"位置来源" → 一旦 ML Kit 漏读「一」「二」
+/// （细横线字形，实测必漏），就只认出 5 列、**周一周二的课全丢**，
+/// 13 门课只剩 7 格。
+///
+/// ## 显式排除「第 6 周」「第 1 节」
+///
+/// 它们长得也像数字，但一个是**周次**、一个是**节次**，混进日期行会把列距算歪。
+///
+/// ## ⚠️ 纯数字很宽松，调用方必须限定区域
+///
+/// `^\d{1,2}$` 连节次号都匹配。所以这个函数只回答"**长得像不像日期**"，
+/// 是否真是日期由调用方的位置条件决定（表头正下方那一条带）。
+bool looksLikeDateToken(String raw) {
+  final String s = _stripLeadNoise(raw).replaceAll(RegExp(r'\s+'), '');
+  if (s.isEmpty || s.length > 12) return false;
+
+  // 不是日期的东西：周次 / 节次
+  if (RegExp(r'^第\s*\d{1,2}\s*[周週]$').hasMatch(s)) return false;
+  if (RegExp(r'^第\s*\d{1,2}\s*节$').hasMatch(s)) return false;
+
+  // 完整日期：2026-10-09 / 2026/10/9 / 2026.10.9
+  if (RegExp(r'^\d{4}\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}$').hasMatch(s)) {
+    return true;
+  }
+
+  // 数字 + 分隔符：10/9、10-9、10.9、10、9、10\9
+  if (RegExp(r'^\d{1,2}\s*[-/.、,，\\]\s*\d{1,2}$').hasMatch(s)) return true;
+
+  // 中文月日：10月9日 / 10月9号 / 10月九日 / 九月九号
+  if (RegExp(r'^\d{1,2}\s*月\s*(\d{1,2}|[一二三四五六七八九十]{1,3})\s*[日号]?$')
+      .hasMatch(s)) {
+    return true;
+  }
+  if (RegExp(r'^[一二三四五六七八九十]{1,3}\s*月\s*'
+          r'[一二三四五六七八九十]{1,3}\s*[日号]?$')
+      .hasMatch(s)) {
+    return true;
+  }
+
+  // 只写日号：9 / 09 / 9日 / 9号 / 九 / 九日
+  if (RegExp(r'^\d{1,2}\s*[日号]?$').hasMatch(s)) return true;
+  if (RegExp(r'^[一二三四五六七八九十]{1,3}\s*[日号]?$').hasMatch(s)) {
+    return true;
+  }
+
+  return false;
+}
+
+/// 「这一行像不像一个节次」—— 节次栏的写法同样不统一。
+///
+/// 认：`1`、`01`、`第1节`、`1节`、`一`、`十二`、`第十三节`
+///
+/// 不认：`08:00`（时刻）、`第6周`（周次）、`10月9日`（日期）。
+///
+/// 返回节次号；认不出返回 null。
+int? parsePeriodToken(String raw) {
+  final String s = _stripLeadNoise(raw).replaceAll(RegExp(r'\s+'), '');
+  if (s.isEmpty || s.length > 8) return null;
+
+  // 阿拉伯数字（可带「第…节」外壳）
+  final RegExpMatch? arabic =
+      RegExp(r'^(?:第)?\s*(\d{1,2})\s*(?:节)?$').firstMatch(s);
+  if (arabic != null) {
+    final int? p = int.tryParse(arabic.group(1)!);
+    return (p != null && p >= 1 && p <= 30) ? p : null;
+  }
+
+  // 中文数字：一、十二、二十三（可带「第…节」外壳）
+  final RegExpMatch? chinese =
+      RegExp(r'^(?:第)?\s*([一二三四五六七八九十]{1,3})\s*(?:节)?$').firstMatch(s);
+  if (chinese != null) {
+    final int? p = _chineseNumber(chinese.group(1)!);
+    return (p != null && p >= 1 && p <= 30) ? p : null;
+  }
+
+  return null;
+}
+
+/// 中文数字 → int（只处理 1~30 这个量级，够节次用）。
+///
+/// 规则：`十` = 10、`十二` = 12、`二十` = 20、`二十三` = 23、`三十` = 30。
+int? _chineseNumber(String s) {
+  const Map<String, int> digit = <String, int>{
+    '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+    '六': 6, '七': 7, '八': 8, '九': 9,
+  };
+  if (s.isEmpty) return null;
+  if (!s.contains('十')) {
+    // 单个数字，或者多字但都是数字（如「二三」—— 不算合法数字，返回 null）
+    return s.length == 1 ? digit[s] : null;
+  }
+  final int idx = s.indexOf('十');
+  final String head = s.substring(0, idx);
+  final String tail = s.substring(idx + 1);
+  final int tens = head.isEmpty ? 1 : (digit[head] ?? 0);
+  final int ones = tail.isEmpty ? 0 : (digit[tail] ?? 0);
+  if (tens == 0) return null;
+  return tens * 10 + ones;
+}
+
 bool _looksLikeWeekdayHeader(String raw) =>
     _weekdayLeadPattern.hasMatch(_stripLeadNoise(raw));
 
 /// 行首的「上课时刻」：`08:00-08:50` / `08:00~08:50`，全角冒号也认。
 final RegExp _leadClockPattern =
     RegExp(r'^\s*\d{1,2}\s*[:：]\s*\d{2}\s*[-~—－]\s*\d{1,2}\s*[:：]\s*\d{2}\s*');
-
 /// 剥掉行首的上课时刻（没有就原样返回）。
 String _stripLeadClock(String s) => s.replaceFirst(_leadClockPattern, '');
 
@@ -357,7 +487,7 @@ ParsedTimetable parseTimetable(
       .map((_HeaderPart h) => h.top)
       .reduce((double a, double b) => a < b ? a : b);
 
-  // ---- 2. 日期行：表头正下方、`M-D` / `M/D` 形态 ----
+  // ---- 2. 日期行：表头正下方那一排日期 ----
   //
   // ⚠️ 斜杠也要认（2026-10-07 真机实测）：另一款 App 写的是 `11/2`，
   // 只认 `-` 的话这一整行既进不了列、也定不出 `dateRowBottom`，
@@ -366,10 +496,10 @@ ParsedTimetable parseTimetable(
   // ⚠️ 还要认**光秃秃的日号**（2026-10-08 真机实测）：这个 App 的日期行
   // 写的是 `5` `6` `7` …（不带月份），一个都不匹配 → `dateRowBottom`
   // 停在表头下沿 → 日期被当成课程内容，课名变成 `5材料力`、`7材料力学`。
-  final RegExp datePattern = RegExp(r'^\d{1,2}[/\-]\d{1,2}$');
-  final RegExp dayOnlyPattern = RegExp(r'^\d{1,2}$');
-  bool looksLikeDateToken(String s) =>
-      datePattern.hasMatch(s) || dayOnlyPattern.hasMatch(s);
+  //
+  // ⚠️ 判据**统一走全局的 [looksLikeDateToken]**（2026-10-09）：以前这里和
+  // `_bareHeaderScan` 各写一份，改一处漏一处 —— 真机上就是"主流程认纯日号、
+  // 兜底不认"，导致兜底失效、周一周二的课全丢。现在只有一份实现。
   double dateRowBottom = headerBottom;
   for (final OcrBlock b in sorted) {
     if (b.top < headerBottom || b.top > headerBottom + 80) continue;
@@ -381,7 +511,7 @@ ParsedTimetable parseTimetable(
     if (tokens.isEmpty || !tokens.every(looksLikeDateToken)) continue;
     // 光秃秃的日号只认**课程区**里的（节次栏的 `1`/`2` 也是裸数字，
     // 虽然它在表头下面，但那是节次号不是日期）
-    if (!tokens.any(datePattern.hasMatch) &&
+    if (!tokens.any(_hasDateStructure) &&
         b.centerX < columns.first.left) {
       continue;
     }
@@ -406,7 +536,7 @@ ParsedTimetable parseTimetable(
 
   // ---- 3. 节次锚点（增强版：漏读补位 + 读残收编，见函数注释） ----
   final List<PeriodAnchor> anchors =
-      _recoverAnchors(sorted, columns.first.left);
+      _recoverAnchors(sorted, columns.first.left, dateRowBottom);
 
   // ---- 4. 分流：像素路线 / 纯文字路线 ----
   if (pixels != null) {
@@ -493,20 +623,29 @@ class TimetablePixels {
 ///    下一节的位置上**的也收编（按位置重新编号）—— 那是读残的尾节
 /// 2. 相邻锚点的间距 ≈ 整数倍中位间距时，中间补**幽灵锚点**（漏读的节）
 /// 3. 最后按位置重新编号 1..n（拼图永远从第 1 节开始，表头是固定的）
-List<PeriodAnchor> _recoverAnchors(List<OcrBlock> sorted, double firstColumnLeft) {
+List<PeriodAnchor> _recoverAnchors(
+  List<OcrBlock> sorted,
+  double firstColumnLeft,
+  double dateRowBottom,
+) {
   // ⚠️ 节次栏有**两种写法**，都要认（2026-10-07 真机实测）：
   //   - 裸数字：`1` `2` … `13`（第一款 App）
   //   - `第N节`：`第1节` `第12节`（另一款 App）—— 只认裸数字的话这里
   //     一个锚点都收不到（实测 0 个），节次范围全乱、整列课挤成一格
-  final RegExp numberPattern = RegExp(r'^(?:第)?\s*(\d{1,2})\s*(?:节)?$');
+  //
+  // ⚠️ 2026-10-09 起统一走 [parsePeriodToken]，顺带支持中文数字（`一` `十二`）。
+  // 它同时排除掉时刻（`08:00`）、周次（`第6周`）、日期（`10月9日`）。
   final List<_PeriodAnchor> raw = <_PeriodAnchor>[];
   for (final OcrBlock b in sorted) {
-    final String t = b.text.trim();
-    final RegExpMatch? m = numberPattern.firstMatch(t);
-    if (m == null) continue;
-    final int? p = int.tryParse(m.group(1)!);
-    if (p == null || p < 1 || p > 30) continue;
+    final int? p = parsePeriodToken(b.text);
+    if (p == null) continue;
     if (b.centerX >= firstColumnLeft) continue; // 课程区里的纯数字是噪声
+    // ⚠️ 表头 / 日期行区域里的数字**也不是节次**（2026-10-09 真机实测）：
+    // 这款 App 把月份单独写一行 `10月`，OCR 把它拆成 `10` + `2月` ——
+    // 那个 `10` 正好落在节次栏的 x 范围内，被当成「第 10 节」收了进去。
+    // 后果是整条锚点链错位、**真节次被丢弃**，最后按位置重编号时
+    // **所有节次号整体 +1**（课表上第 1-2 节的课被识别成 2-3 节）。
+    if (b.centerY < dateRowBottom) continue;
     raw.add(_PeriodAnchor(period: p, centerY: b.centerY));
   }
   if (raw.isEmpty) return const <PeriodAnchor>[];
@@ -524,6 +663,11 @@ List<PeriodAnchor> _recoverAnchors(List<OcrBlock> sorted, double firstColumnLeft
   for (int i = 1; i < raw.length; i++) {
     final _PeriodAnchor cur = raw[i];
     final _PeriodAnchor last = kept.last;
+    // ⚠️ 离上一个锚点太近（不足中位间距的一半）→ 是 ML Kit 误认的噪声，
+    // 不是真的节次行（2026-10-09 真机实测：节次 1 和 2 之间凭空冒出一个 `7`，
+    // 两者只差 69px，而正常间距是 240）。留着它会挤掉后面的真锚点，
+    // 连锁反应是整列节次号偏移。
+    if (cur.centerY - last.centerY < medianGap * 0.5) continue;
     if (cur.period > last.period) {
       kept.add(cur);
       continue;
@@ -1750,12 +1894,17 @@ _BareHeaderScan? _bareHeaderScan(
       .map((_HeaderPart h) => h.bottom)
       .reduce((double a, double b) => a > b ? a : b);
 
-  // ---- ② 日期行：表头正下方那一排 `11/2 11/3 …` ----
-  final RegExp datePattern = RegExp(r'^\d{1,2}[/\-]\d{1,2}$');
+  // ---- ② 日期行：表头正下方那一排日期（判据见 [looksLikeDateToken]）----
+  //
+  // ⚠️ 这里以前自己写了一份 `^\d{1,2}[/\-]\d{1,2}$`，**只认带分隔符的写法**。
+  // 而这款 App 写的是**纯日号 `12 13 14…`**（月份单独一行 `10月`）→
+  // 整排日期一个都提不到 → 兜底的"位置来源"失效 → 「一」「二」漏读后
+  // 补不齐 7 列（2026-10-09 真机实测：13 门课只剩 7 格）。
+  // 现在和主流程共用同一个判据，**别再分家**。
   final List<_HeaderPart> dates = <_HeaderPart>[];
   for (final OcrBlock b in sorted) {
     if (b.top < rowTop - 20 || b.top > rowBottom + 140) continue;
-    if (!datePattern.hasMatch(_stripLeadNoise(b.text))) continue;
+    if (!looksLikeDateToken(b.text)) continue;
     dates.add(_HeaderPart(
       weekday: 0,
       left: b.left,

@@ -197,6 +197,7 @@ void main() {
   mainSameName();
   mainRoomSpan();
   mainBareHeader();
+  mainAnchorNoise();
 }
 
 // ===========================================================================
@@ -455,5 +456,72 @@ void mainBareHeader() {
       expect(n.contains('三四五六'), isFalse);
       expect(n.contains('11/'), isFalse);
     }
+  });
+}
+
+// ===========================================================================
+// 节次锚点：表头区的数字 / 贴太近的噪声数字
+// ===========================================================================
+
+/// 用户 2026-10-09 报的「课表导入只能识别到四节课」（实际是 13 门课只剩 7 格）。
+///
+/// 真机实测两个**假锚点**把节次链搞乱了：
+///
+///   1. **表头的 `10`**：这款 App 把月份单独写一行 `10月`，OCR 把它拆成
+///      `10` + `2月` —— 那个 `10` 落在节次栏的 x 范围里，被当成「第 10 节」。
+///   2. **节次 1 和 2 之间凭空冒出的 `7`**：两者只差 69px，而正常间距是 240。
+///
+/// 后果：收编逻辑把**真节次 2 丢掉**，最后按位置重编号 → **所有节次号整体 +1**
+/// （第 1-2 节的课被识别成 2-3 节）。
+final List<OcrBlock> anchorNoiseFixture = <OcrBlock>[
+  // 表头（裸的 `一 二 三 四 五 六 日`）+ 月份被拆出来的 `10`
+  b(430, 180, 900, 210, '三四五六'),
+  b(990, 180, 1030, 210, '日'),
+  b(55, 180, 93, 210, '10'), // ⚠️ 「10月」的一半，落在节次栏 x 范围
+  b(170, 240, 206, 260, '12'),
+  b(307, 240, 343, 260, '13'),
+  b(444, 240, 516, 260, '14 15'),
+  b(718, 240, 754, 260, '16'),
+  b(855, 240, 891, 260, '17'),
+  b(992, 240, 1028, 260, '18'),
+  // 节次栏：1 2 3 …，但 1 和 2 之间混进一个误认的 `7`
+  b(16, kPeriodY[0] - 14, 50, kPeriodY[0] + 14, '1'),
+  b(16, kPeriodY[0] + 40, 50, kPeriodY[0] + 68, '7'), // ⚠️ 噪声：离上一锚点只有 54px
+  b(16, kPeriodY[1] - 14, 50, kPeriodY[1] + 14, '2'),
+  b(16, kPeriodY[2] - 14, 50, kPeriodY[2] + 14, '3'),
+  b(16, kPeriodY[3] - 14, 50, kPeriodY[3] + 14, '4'),
+  // 第一节课（第 1 节）—— 修好后应该落在 1，不是 2
+  b(112, kPeriodY[0] - 10, 250, kPeriodY[0] + 20, '丁香课'),
+  b(150, kPeriodY[0] + 30, 280, kPeriodY[0] + 60, '丁香楼101'),
+];
+
+void mainAnchorNoise() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  late ParsedTimetable parsed;
+
+  setUpAll(() {
+    parsed = parseTimetable(anchorNoiseFixture);
+  });
+
+  test('★ 表头区的数字 + 贴太近的噪声数字都不能当节次锚点', () {
+    expect(
+      parsed.periodAnchors.map((PeriodAnchor a) => a.period).toList(),
+      <int>[1, 2, 3, 4],
+      reason: '假锚点（表头的 `10`、节次 1-2 之间的 `7`）不能进锚点链，'
+          '否则真节次会被挤掉、整列节次号偏移',
+    );
+  });
+
+  test('★ 第 1 节的课不能被识别成第 2 节', () {
+    expect(parsed.cells, isNotEmpty, reason: '夹具至少要能解析出一格');
+    // 假锚点会让所有节次号整体 +1，所以最靠上的那格必然从 2 开始
+    final List<int> starts = parsed.cells
+        .map((ParsedCell c) => c.startPeriod)
+        .whereType<int>()
+        .toList();
+    expect(starts, isNotEmpty, reason: '每格都应该有节次');
+    expect(starts.reduce((int a, int b) => a < b ? a : b), 1,
+        reason: '假锚点会让所有节次号整体 +1（第 1 节变成第 2 节）');
   });
 }
