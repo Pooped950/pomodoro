@@ -236,8 +236,18 @@ class _ImportTimetablePageState extends ConsumerState<ImportTimetablePage> {
       // 分别 OCR 时每张都是原始分辨率，节次号全部认对。
       // 详见 `domain/ocr/half_ocr_merge.dart`。
       OcrResult? result;
-      final String? topPath = _topPath;
-      final String? bottomPath = _bottomPath;
+      // ⚠️ 必须用 `stitched.effectiveTopPath / effectiveBottomPath`，
+      // **不能用用户选的那两条**（`_topPath` / `_bottomPath`）——
+      // 用户把上下选反时 stitchAuto 会内部交换，拼图和 dstY/srcTop 都是按
+      // 交换后的几何算的；这里若还按原始顺序分半 OCR，就会出现
+      // 「几何按 A 算、图片是 B 的顺序」→ 坐标映射全乱，
+      // 表现是拼图看着没问题、识别结果却一塌糊涂（2026-10-09 用户报的 bug）。
+      final String? topPath = stitched.effectiveTopPath.isEmpty
+          ? _topPath
+          : stitched.effectiveTopPath;
+      final String? bottomPath = stitched.effectiveBottomPath.isEmpty
+          ? _bottomPath
+          : stitched.effectiveBottomPath;
       if (topPath != null && bottomPath != null) {
         try {
           final OcrResult topOcr = await _ocr.recognizeFile(topPath);

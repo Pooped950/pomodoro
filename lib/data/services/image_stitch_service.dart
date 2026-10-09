@@ -19,10 +19,26 @@ class StitchOutcome {
     this.match,
     this.dstY = 0,
     this.srcTop = 0,
+    this.effectiveTopPath = '',
+    this.effectiveBottomPath = '',
   });
 
   /// 拼好的整张图（PNG，落在应用缓存目录里，可以直接喂给识别器）
   final String path;
+
+  /// ⚠️ **分半 OCR 时必须用这两条路径，而不是用户选的那两条。**
+  ///
+  /// 用户把上下两张选反了时，[stitchAuto] 会**内部交换**再拼 ——
+  /// 拼图是对的，`dstY`/`srcTop` 也是按交换后的几何算的。
+  /// 但调用方如果还拿"用户选的原始路径"去分别 OCR，就会出现
+  /// **几何按 A 算、图片是 B 的顺序**：坐标映射全乱，
+  /// 表现是"拼图看着没问题，识别结果却一塌糊涂"
+  /// （2026-10-09 用户报的 bug）。
+  ///
+  /// 所以这里把**实际用于拼接的那两条路径**原样带出来，调用方直接用。
+  /// 没交换时它们就等于用户选的那两条。
+  final String effectiveTopPath;
+  final String effectiveBottomPath;
 
   /// 重叠了多少**原图像素**
   final int overlapPixels;
@@ -323,6 +339,10 @@ class ImageStitchService {
         dstY: dstY,
         srcTop: srcTop,
         match: match,
+        // 传进来的 topPath / bottomPath 已经是**交换后**的（见 stitchAuto），
+        // 原样带出去给分半 OCR 用，避免调用方又拿回用户选的原始顺序
+        effectiveTopPath: topPath,
+        effectiveBottomPath: bottomPath,
       );
     } finally {
       // 原图位图很大，必须立刻还回去
