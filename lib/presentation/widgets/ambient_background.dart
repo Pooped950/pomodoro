@@ -210,12 +210,19 @@ class _ImageBackgroundLayer extends StatelessWidget {
     if (settings.blurred) {
       // 先放大一点点再模糊：高斯模糊会采样边界外的像素，
       // 不放大就会在屏幕四周出现一圈发虚的白边
-      image = ImageFiltered(
-        imageFilter: ui.ImageFilter.blur(
-          sigmaX: _blurSigma,
-          sigmaY: _blurSigma,
+      //
+      // ⚠️ 外面套 [RepaintBoundary]（2026-10-09 性能优化）：
+      // 高斯模糊是**实时算**的，每次重绘都要把整屏重新采样一遍 ——
+      // 低端机 GPU 填充率本来就紧张，一次多余的模糊就是一次肉眼可见的卡。
+      // 用边界把它圈起来，只有模糊层自己变脏时才重绘。
+      image = RepaintBoundary(
+        child: ImageFiltered(
+          imageFilter: ui.ImageFilter.blur(
+            sigmaX: _blurSigma,
+            sigmaY: _blurSigma,
+          ),
+          child: Transform.scale(scale: 1.08, child: image),
         ),
-        child: Transform.scale(scale: 1.08, child: image),
       );
     }
 

@@ -27,14 +27,17 @@ class HomePage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // ⚠️ **不要在这里 watch `nowProvider`**（2026-10-09 性能优化）。
+    //
+    // 它每秒变一次，在这层 watch 会把整页 —— 头部进度、任务条、环形、
+    // 控制按钮 —— 全部重建一遍。低端机上就是肉眼可见的掉帧。
+    // 真正依赖"现在几点"的只有环形里的倒计时文字和进度弧，
+    // 所以那部分单独抽成了 [_LiveTimerRing]。
     final TimerState state = ref.watch(timerProvider);
-    final DateTime now = ref.watch(nowProvider);
     // M4：今日完成数从 sessions 实时聚合（不再用内存里的轮次计数）
     final int todayCount = ref.watch(todayFocusCountProvider).value ?? 0;
     final ColorScheme scheme = Theme.of(context).colorScheme;
 
-    final int remaining = state.remainingSecondsAt(now);
-    final double fraction = state.remainingFractionAt(now);
     final Color accent = _accentFor(state.phase, scheme);
     final Motion motion = MotionScope.of(context);
 
@@ -86,15 +89,10 @@ class HomePage extends ConsumerWidget {
                         c.maxHeight * 0.94,
                       );
                       return Center(
-                        child: TimerRing(
-                          fraction: fraction,
-                          timeText: formatClock(remaining),
-                          phaseLabel: state.isIdle
-                              ? state.phase.idleLabel
-                              : (state.isPaused ? '已暂停' : state.phase.label),
+                        child: _LiveTimerRing(
+                          state: state,
                           color: accent,
                           size: ringSize,
-                          animate: !state.isIdle,
                         ),
                       );
                     },
@@ -120,14 +118,57 @@ class HomePage extends ConsumerWidget {
       ),
     );
   }
+}
 
-  /// 专注用主色（暖），休息用第三色（冷）。
-  /// 这是符合直觉的语义映射 —— 方案 5.2 节配色约定。
-  Color _accentFor(TimerPhase phase, ColorScheme scheme) => switch (phase) {
-        TimerPhase.focus => scheme.primary,
-        TimerPhase.shortBreak => scheme.tertiary,
-        TimerPhase.longBreak => scheme.secondary,
-      };
+/// 专注用主色（暖），休息用第三色（冷）。
+/// 这是符合直觉的语义映射 —— 方案 5.2 节配色约定。
+Color _accentFor(TimerPhase phase, ColorScheme scheme) => switch (phase) {
+      TimerPhase.focus => scheme.primary,
+      TimerPhase.shortBreak => scheme.tertiary,
+      TimerPhase.longBreak => scheme.secondary,
+    };
+
+/// **全页唯一跟着秒针重建的地方**（2026-10-09 性能优化）。
+///
+/// ## 为什么单独拆出来
+///
+/// 倒计时文字和进度弧每秒都要变，但页面上的其它东西 —— 头部进度、
+/// 任务绑定条、三个控制按钮、底部留白 —— **一年也不变一次**。
+/// 之前在 `HomePage.build` 里 `ref.watch(nowProvider)`，等于让整页
+/// 每秒重建：低端机上每一秒都要重新布局一整棵子树，肉眼可见地卡。
+///
+/// 拆出来之后，每秒重建的只有这一个 `TimerRing`。
+///
+/// ⚠️ 外面再套一层 [RepaintBoundary]：环形是 `CustomPaint` 画的，
+/// 每秒重绘一次，用边界把它和页面上其它绘制隔开，
+/// 免得一次重绘把整屏都拖进重绘区（低端机 GPU 填充率本来就紧张）。
+class _LiveTimerRing extends ConsumerWidget {
+  const _LiveTimerRing({
+    required this.state,
+    required this.color,
+    required this.size,
+  });
+
+  final TimerState state;
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final DateTime now = ref.watch(nowProvider);
+    return RepaintBoundary(
+      child: TimerRing(
+        fraction: state.remainingFractionAt(now),
+        timeText: formatClock(state.remainingSecondsAt(now)),
+        phaseLabel: state.isIdle
+            ? state.phase.idleLabel
+            : (state.isPaused ? '已暂停' : state.phase.label),
+        color: color,
+        size: size,
+        animate: !state.isIdle,
+      ),
+    );
+  }
 }
 
 /// 弹出任务选择器，把结果写进 [selectedTaskIdProvider]。

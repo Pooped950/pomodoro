@@ -104,7 +104,32 @@ class _AppShellState extends ConsumerState<AppShell> {
     // 不是跟着第一帧一起挤进来
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _maybeShowStartupDialogs());
+
+    // ⚠️ 强制更新的**补弹**通道（2026-10-09）。
+    //
+    // 启动检查为了不阻塞首帧只等 1.2 秒（见 `_maybeShowStartupDialogs`），
+    // 学校 WiFi 慢的时候 1.2 秒根本拉不到 `version.json` ——
+    // 那时 `state.action` 还是默认值，**强制更新弹窗就漏掉了**。
+    // 所以这里挂个监听：后台那次检查跑完、action 变成 forceUpdate 时补弹。
+    _updateSub = ref.listenManual<UpdateState>(
+      updateStateProvider,
+      (UpdateState? _, UpdateState next) {
+        if (!mounted) return;
+        if (next.action == UpdateAction.forceUpdate &&
+            !_forceDialogShown &&
+            next.remote != null) {
+          _forceDialogShown = true;
+          unawaited(_showRemoteUpdateDialog(next));
+        }
+      },
+    );
   }
+
+  /// 强制更新弹窗只弹一次（用户点「立即更新」进更新页后不该再被盖一层）
+  bool _forceDialogShown = false;
+
+  /// 启动检查的订阅（dispose 时要退掉）
+  ProviderSubscription<UpdateState>? _updateSub;
 
   /// 启动时要弹的窗：**远端更新说明 → 本地大版本兜底 → 首次手册**。
   ///
@@ -176,6 +201,8 @@ class _AppShellState extends ConsumerState<AppShell> {
     final UpdateInfo? remote = state.remote;
     if (remote == null) return;
     final bool force = state.action == UpdateAction.forceUpdate;
+    // 记一笔：force 档从 initState 的监听里补弹时不要重复
+    if (force) _forceDialogShown = true;
 
     await showUpdateDialog(
       context,
@@ -194,6 +221,7 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   @override
   void dispose() {
+    _updateSub?.close();
     _controller.removeListener(_onScroll);
     _controller.dispose();
     _pageOffset.dispose();
