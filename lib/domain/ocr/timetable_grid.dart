@@ -1005,7 +1005,13 @@ List<_GeoCell> _splitCellsByTextGaps(
       // 信号①：教室行 → 课名行 = 新的一门课。
       // ⚠️ 这条**不看间隙大小**：同名的两节课在真图上可以贴得很近
       // （App 把它们画成一块同色的连续区域），间隙一小就没有别的信号可用了。
-      final bool byRoomLine = looksLikeRoomLine(prev.$3) &&
+      //
+      // ⚠️ 判据必须用 [_looksLikeStrongRoomLine] 而不是完整的
+      // [looksLikeRoomLine] —— 后者把**单独的 `教`** 也算教室标志，
+      // 而 `教` 是课程名常用字：真机实测 `大数据与法律检索` 里的
+      // `大数据` 被 OCR 认成 `大教据`，于是被当成"教室行"，
+      // 整门课被拦腰切成两格（2026-10-09）。
+      final bool byRoomLine = _looksLikeStrongRoomLine(prev.$3) &&
           !looksLikeRoomLine(next.$3) &&
           _cjkCount(next.$3) >= 2;
       // 其余两个信号要求行与行之间**真的分开**（≥ 1/4 个节距），
@@ -1826,6 +1832,34 @@ int _weekdayNumber(String hanzi) {
   const List<String> names = <String>['一', '二', '三', '四', '五', '六', '日'];
   final int i = names.indexOf(hanzi);
   return i >= 0 ? i + 1 : 7; // 「天」兜底为周日
+}
+
+/// 「这一行**很像**教室行」—— 比 [looksLikeRoomLine] 更严，只给
+/// `_splitCellsByTextGaps` 的「教室行 → 课名行 = 新的一门课」这个信号用。
+///
+/// ## 为什么不能直接用 [looksLikeRoomLine]（2026-10-09 真机实测）
+///
+/// 它把**单独的 `教`** 也算教室标志（为了兜住 `四教`、`北教-102` 这些写法），
+/// 而 `教` 是课程名里的常用字。真机实测：`大数据与法律检索` 的 `大数据`
+/// 被 ML Kit 认成 **`大教据`** —— 含 `教` → 被判成教室行 → 触发
+/// 「教室行后面跟着课名行」→ **整门课被拦腰切成两格**。
+///
+/// 这里要求更硬的证据：`@` 前缀 / 楼室场馆房 / 「教室」「教学楼」成词 /
+/// `教` 带数字 / 整行就是「数字+教」。
+bool _looksLikeStrongRoomLine(String line) {
+  final String s = squeeze(line);
+  if (s.isEmpty) return false;
+  final OcrRules r = ocrRules;
+  if (r.roomPrefix.isNotEmpty && s.contains(r.roomPrefix)) return true;
+  if (RegExp(r'[楼室场馆房]').hasMatch(s)) return true;
+  if (s.contains('教室') || s.contains('教学楼')) return true;
+  // `教301` / `北教-102`：`教` 后面（不远处）有数字
+  if (s.contains('教') && RegExp(r'\d').hasMatch(s)) return true;
+  // `四教` / `三教` / `2教`：整行就是「数字/汉字数字 + 教」
+  if (RegExp(r'^[一二三四五六七八九十百\d]+教$').hasMatch(s)) return true;
+  // 整行只有数字和分隔符（`101` / `02` / `1-14`）—— 课程名不会长这样
+  // （教室名被换行拆出来的第二段就是这种）
+  return RegExp(r'^[\s\-~～_/]*\d[\d\s\-~～_/]*$').hasMatch(s);
 }
 
 /// y 离哪个节的锚点最近就算哪一节。格是竖着跨行的，取上沿/下沿各判一次。
