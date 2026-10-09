@@ -55,8 +55,14 @@ object ClassReminderScheduler {
     /** 每条提醒一个请求码，从 1000 起（避开 TimerAlarmReceiver 的 21） */
     private const val BASE_REQUEST = 1000
 
-    /** 最多支持这么多条提醒（一张课表一周不会超过 60 节课） */
-    const val MAX_ITEMS = 64
+    /**
+     * 最多支持这么多条提醒。
+     *
+     * ⚠️ 这个上限必须**大于任何真实课表** —— 超出的部分会被静默丢掉（不排也不提示）。
+     * 最坏情况是 7 天 × 18 节 = 126 条，所以取 128。
+     * （原来写 64，一周 7 天 × 12 节就超了。请求码与通知 id 各占 128 个，都不冲突。）
+     */
+    const val MAX_ITEMS = 128
 
     /** 一条提醒规则 */
     data class Reminder(
@@ -69,14 +75,19 @@ object ClassReminderScheduler {
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** Dart 侧下发整个列表 + 提醒方式：存起来 + 全部重排 */
-    fun apply(ctx: Context, json: String, vibrate: Boolean, sound: Boolean) {
+    /**
+     * Dart 侧下发整个列表 + 提醒方式：存起来 + 全部重排。
+     *
+     * 返回**真正排上的条数**（不是存下的条数）—— 超过 [MAX_ITEMS] 的部分会被丢掉，
+     * 调用方拿这个数字就能看出"发过来的比排上的多"。
+     */
+    fun apply(ctx: Context, json: String, vibrate: Boolean, sound: Boolean): Int {
         prefs(ctx).edit()
             .putString(KEY_ITEMS, json)
             .putBoolean(KEY_VIBRATE, vibrate)
             .putBoolean(KEY_SOUND, sound)
             .apply()
-        rescheduleAll(ctx)
+        return rescheduleAll(ctx)
     }
 
     /** 关掉提醒（两个复选框都取消 / 清空课表） */
@@ -125,12 +136,17 @@ object ClassReminderScheduler {
         }
     }
 
-    /** 全部重排（先取消再排，顺手清掉"已经删掉的课"留下的旧闹钟） */
-    fun rescheduleAll(ctx: Context) {
+    /** 全部重排（先取消再排，顺手清掉"已经删掉的课"留下的旧闹钟）。返回排上的条数。 */
+    fun rescheduleAll(ctx: Context): Int {
         cancelAll(ctx)
+        var scheduled = 0
         load(ctx).forEachIndexed { i, r ->
-            if (i < MAX_ITEMS) scheduleOne(ctx, i, r)
+            if (i < MAX_ITEMS) {
+                scheduleOne(ctx, i, r)
+                scheduled++
+            }
         }
+        return scheduled
     }
 
     fun cancelAll(ctx: Context) {

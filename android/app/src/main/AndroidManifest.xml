@@ -9,6 +9,14 @@
          USE_EXACT_ALARM 面向「核心功能就是计时器 / 闹钟」的应用，Android 13+ 系统
          自动授予，不需要运行时引导页；本应用只装自有测试机，不涉及 Google Play 政策。 -->
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- ⚠️ Android 12（API 31/32）**没有** USE_EXACT_ALARM，只有 SCHEDULE_EXACT_ALARM，
+         而且它必须用户去系统设置里手动授权 —— 否则精确闹钟排不上，上课提醒会降级成
+         不精确闹钟（Doze 下可能晚十几分钟，"提前 10 分钟"就废了）。
+         Android 13+ 走上面的 USE_EXACT_ALARM（闹钟类应用自动授予），故这里 maxSdkVersion=32。
+         两个都声明才算完整覆盖；设置页在拿不到授权时会给出「去开启」的入口。 -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32" />
     <!-- M3 阶段四：保活引导页要用标准对话框申请「电池无限制」（比跳 MIUI 页面更通用） -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 检查更新：读 Gitee 上的版本文件 + 下载 APK -->

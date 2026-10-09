@@ -204,8 +204,11 @@ class MainActivity : FlutterActivity() {
                         // 提醒方式：震动 / 响铃 / 两者（两个都关时 Dart 侧不会调到这里）
                         val vibrate = args["vibrate"] as? Boolean ?: true
                         val sound = args["sound"] as? Boolean ?: true
-                        ClassReminderScheduler.apply(this, json, vibrate, sound)
-                        result.success(ClassReminderScheduler.load(this).size)
+                        // 返回**真正排上的条数**：超过上限的部分会被丢掉，
+                        // 拿这个数字（而不是"存下多少"）才对得上界面。
+                        result.success(
+                            ClassReminderScheduler.apply(this, json, vibrate, sound)
+                        )
                     }
                 }
                 "clear" -> {

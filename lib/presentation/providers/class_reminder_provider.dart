@@ -19,6 +19,19 @@ final classReminderCountProvider = FutureProvider<int>(
       ref.watch(classReminderServiceProvider).count(),
 );
 
+/// 系统有没有放行**精确**闹钟。
+///
+/// `false` 时原生会降级成不精确闹钟（Doze 下可能晚几分钟到十几分钟），
+/// 设置页据此在课表那张卡里插一条「去开启」的提示。
+///
+/// ⚠️ 为什么不静默就算了：Android 12（API 31/32）只有
+/// `SCHEDULE_EXACT_ALARM`，**必须用户手动开**；而"上课前 10 分钟提醒"
+/// 晚十几分钟就等于没提醒 —— 用户只会觉得"这功能不灵"。
+final classReminderExactAlarmProvider = FutureProvider<bool>(
+  (Ref ref) async =>
+      ref.watch(classReminderServiceProvider).canScheduleExact(),
+);
+
 /// **课表一变就重排上课提醒。**
 ///
 /// ## 为什么挂在 `timetableProvider` 上，而不是"导入成功回调"

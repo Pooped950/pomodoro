@@ -9,6 +9,7 @@ import '../../../domain/settings/motion_settings.dart';
 import '../../../domain/settings/reminder_settings.dart';
 import '../../../domain/timer/timer_engine.dart';
 import '../../providers/app_settings_provider.dart';
+import '../../providers/class_reminder_provider.dart';
 import '../../providers/timer_provider.dart';
 import '../../widgets/ambient_background.dart';
 import '../../widgets/app_card.dart';
@@ -36,6 +37,11 @@ class SettingsDetailPage extends ConsumerWidget {
         ref.read(reminderSettingsProvider.notifier);
     final ClassReminderSettings classReminder =
         ref.watch(classReminderSettingsProvider);
+    // 系统有没有放行「精确闹钟」。false 时课表那张卡里插一条提示 ——
+    // Android 12 只能用户手动开，不给提示的话提醒会**静默**晚几分钟
+    // （对"提前 10 分钟"来说等于没用，所以必须让用户看得见）
+    final bool? exactAlarm =
+        ref.watch(classReminderExactAlarmProvider).value;
     final TextTheme text = Theme.of(context).textTheme;
 
     return Scaffold(
@@ -144,9 +150,12 @@ class SettingsDetailPage extends ConsumerWidget {
                     child: Column(
                       children: <Widget>[
                         _SwitchRow(
-                          label: '上课提醒',
-                          // 说清"什么时候排的" —— 用户会问"我导入了怎么没响"
-                          subtitle: '每节课上课前 10 分钟提醒（导入课表后自动排好）',
+                          // ⚠️ 这一行原来叫「上课提醒」，但它绑的是 vibrate ——
+                          // 用户想"关掉上课提醒"会关它，可「响铃」还开着、照样响。
+                          // 改名跟上面番茄钟那组保持一致（那边就叫「震动」）
+                          label: '震动',
+                          // 说清"什么时候提醒" —— 用户会问"我导入了怎么没响"
+                          subtitle: '每节课上课前 10 分钟提醒，响时震动',
                           value: classReminder.vibrate,
                           onChanged: (bool v) => ref
                               .read(classReminderSettingsProvider.notifier)
@@ -161,6 +170,15 @@ class SettingsDetailPage extends ConsumerWidget {
                               .read(classReminderSettingsProvider.notifier)
                               .setSound(v),
                         ),
+                        // 只在"系统没放行精确闹钟"时出现（Android 12 常见）
+                        if (exactAlarm == false) ...<Widget>[
+                          const _RowDivider(),
+                          _ExactAlarmRow(
+                            onTap: () => ref
+                                .read(classReminderServiceProvider)
+                                .openExactAlarmSettings(),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -626,6 +644,66 @@ class _SwitchRow extends StatelessWidget {
           ),
           Switch(value: value, onChanged: enabled ? onChanged : null),
         ],
+      ),
+    );
+  }
+}
+
+/// 「精确提醒未开启」提示行 —— **只在系统没放行精确闹钟时出现**。
+///
+/// ## 为什么必须有这一条
+///
+/// Android 12（API 31/32）只有 `SCHEDULE_EXACT_ALARM`，且**必须用户去系统设置里开**。
+/// 拿不到时原生会降级成不精确闹钟（`setAndAllowWhileIdle`），在 Doze 下可能晚
+/// 几分钟到十几分钟 —— 而"上课前 10 分钟提醒"晚十几分钟就等于没提醒。
+/// 原来这个降级是**完全静默**的：用户只会觉得"这功能不灵"。
+///
+/// 点一下直接跳到系统的「闹钟与提醒」授权页（`ACTION_REQUEST_SCHEDULE_EXACT_ALARM`）。
+class _ExactAlarmRow extends StatelessWidget {
+  const _ExactAlarmRow({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final TextTheme text = Theme.of(context).textTheme;
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+
+    return Pressable(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.item,
+          10,
+          AppSpacing.tight,
+          10,
+        ),
+        child: Row(
+          children: <Widget>[
+            Icon(Icons.alarm_off_rounded, size: 18, color: scheme.error),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text('精确提醒未开启', style: text.bodyMedium),
+                  const SizedBox(height: 2),
+                  Text(
+                    '系统可能让上课提醒晚几分钟。点这里去开启「闹钟与提醒」',
+                    style: text.bodySmall?.copyWith(
+                      color: scheme.onSurface.withValues(alpha: 0.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 20,
+              color: scheme.onSurface.withValues(alpha: 0.4),
+            ),
+          ],
+        ),
       ),
     );
   }
