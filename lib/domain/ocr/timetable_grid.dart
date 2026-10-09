@@ -1487,6 +1487,39 @@ int _vocabHitScore(TimetableVocab vocab, String text) {
   if (lines.isEmpty) return (<String>[], <String>[]);
   final String joined = squeeze(lines.join());
 
+  // 0) `@` 分界 —— **最硬的信号，必须排在词表前面**（2026-10-09 真机实测）
+  //
+  // 这款 App 用 `@` 分隔课名和教室，而且位置**不固定**：
+  //   - 行首：`@腾龙楼408教室`（教室行自己以 @ 开头）
+  //   - 行尾：`权法@`（课名最后一行以 @ 结尾，教室从下一行开始）
+  //
+  // ⚠️ 为什么不能只靠下面的词表前缀：词表是**从粗拆结果投票来的**，
+  // 而粗拆遇到"课名跨两行"会切错（`英汉/汉` + `英笔译` 被切成课名只有
+  // 第一行）—— 错误进了词表，精拆再按错的词表切一遍，**错就固化了**。
+  // 真机实测：课名成了 `英汉/汉`、教室成了 `英笔译@腾龙楼408教室`。
+  // `@` 是 App 自己画的字符，课程名不可能含它，比任何词表都可靠。
+  for (int k = 0; k < lines.length; k++) {
+    final String s = squeeze(lines[k]);
+    final int at = s.indexOf('@');
+    if (at < 0) continue;
+    if (at == 0) {
+      // @ 在行首 → 这一行及之后全是教室。第一行就是教室的话课名会空掉，
+      // 宁可整格都算课名（交给用户改），所以跳出交给下面的强规则
+      if (k == 0) break;
+      return (lines.sublist(0, k), lines.sublist(k));
+    }
+    // @ 在行内（含行尾）→ 这一行前半是课名、后半是教室
+    final String head = s.substring(0, at);
+    final String tail = s.substring(at);
+    return (
+      <String>[
+        ...lines.sublist(0, k),
+        if (head.isNotEmpty) head,
+      ],
+      <String>[tail, ...lines.sublist(k + 1)],
+    );
+  }
+
   // 1) 词表前缀
   String? bestVocab;
   for (final String v in vocab.courseNames) {
