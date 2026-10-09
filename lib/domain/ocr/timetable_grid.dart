@@ -28,6 +28,7 @@ library;
 
 import 'dart:typed_data';
 
+import 'common_courses.dart';
 import 'ocr_result.dart';
 import 'ocr_rules.dart';
 import 'timetable_geometry.dart';
@@ -877,6 +878,12 @@ ParsedTimetable _parseWithGeometry({
     // 必须选一个确定性的形态，不然两个格子会各自往对方翻。
     if (n.isNotEmpty) {
       n = _canonicalName(n, nameVotes);
+      // 常见课程词表纠错 —— 投票修不了「所有格子都认错」的情况
+      // （用户 2026-10-09 实测：`毛泽东思想和中国特色社会主义理论体系概论`
+      //  被认成 `毛淨东…`，而整张表里只有一格有这门课，投票无从纠起）。
+      // 判据很严：长度相同 + 差异字里必须有"词表不可能出现的字"，
+      // 所以不会把 `美国文学史…` 误纠成 `英国文学史…`（见函数注释）。
+      n = correctByCourseVocab(n);
     }
     final StringBuffer locBuf = StringBuffer();
     for (final String line in item.$3) {
