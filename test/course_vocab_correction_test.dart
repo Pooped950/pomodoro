@@ -32,6 +32,16 @@ void main() {
       expect(correctByCourseVocab('经济沄学'), '经济法学');
     });
 
+    test('★ 超长课名允许差 3 字（2026-10-10 放宽）', () {
+      // 真机实测：`毛泽东思想和中国特色社会主义理论体系概论`（20 字）
+      // 被认成 `毛淨东…社杜会…体休系…概论` —— **同时错三处**
+      // （认错 + 多认 + 认错），距离正好 3，卡在旧阈值外。
+      expect(
+        correctByCourseVocab('毛淨东思想和中国特色社杜会主义理论休系概论'),
+        '毛泽东思想和中国特色社会主义理论体系概论',
+      );
+    });
+
     test('★ 长课名允许差 2 字', () {
       expect(
         correctByCourseVocab('毛泽东思想和中国特色社杜会主义理论体休概论'),
@@ -46,6 +56,16 @@ void main() {
       expect(correctByCourseVocab(american), american,
           reason: '「美」「英」都是词表里出现过的字，是合法差异不是 OCR 错误');
       const String british = '英国文学史及作品选读';
+      expect(correctByCourseVocab(british), british);
+    });
+
+    test('★ 放宽阈值后，闸门依然拦住英美文学（关键！）', () {
+      // ⚠️ 阈值放宽到 3 之后必须重新确认这道闸门还在：
+      // `美` / `英` 都是词表里出现过的字 → 不可疑 → 无论阈值多宽都不纠
+      const String american = '美国文学史及作品选读';
+      const String british = '英国文学史及作品选读';
+      expect(correctByCourseVocab(american), american,
+          reason: '放宽阈值不能把闸门一起放宽掉');
       expect(correctByCourseVocab(british), british);
     });
 
