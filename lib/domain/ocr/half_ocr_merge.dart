@@ -86,6 +86,17 @@ HalfOcrMerge mergeHalfOcr({
       right: b.right,
       // 跨过拼接线的行：裁到线为止，别让它盖住下半张的内容
       bottom: b.bottom > dstY ? dstY.toDouble() : b.bottom,
+      // 词级坐标：上半张的 y 原样（只把越界的那部分裁到拼缝）
+      words: <OcrWord>[
+        for (final OcrWord w in b.words)
+          OcrWord(
+            text: w.text,
+            left: w.left,
+            top: w.top,
+            right: w.right,
+            bottom: w.bottom > dstY ? dstY.toDouble() : w.bottom,
+          ),
+      ],
     ));
   }
 
@@ -94,12 +105,24 @@ HalfOcrMerge mergeHalfOcr({
     final double bt = b.bottom + delta;
     if ((t + bt) / 2 < dstY) continue; // 跨缝的上半段归上半张
     if (bt <= 0) continue;
+    final double top = t < dstY ? dstY.toDouble() : t;
     out.add(OcrBlock(
       text: b.text,
       left: b.left,
-      top: t < dstY ? dstY.toDouble() : t,
+      top: top,
       right: b.right,
       bottom: bt,
+      // 词级坐标：下半张整体平移 delta（和行坐标同一个变换）
+      words: <OcrWord>[
+        for (final OcrWord w in b.words)
+          OcrWord(
+            text: w.text,
+            left: w.left,
+            top: w.top + delta,
+            right: w.right,
+            bottom: w.bottom + delta,
+          ),
+      ],
     ));
   }
 

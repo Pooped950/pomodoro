@@ -32,6 +32,20 @@ class OcrService {
       for (final TextBlock block in recognized.blocks) {
         for (final TextLine line in block.lines) {
           final Rect box = line.boundingBox;
+          // ⚠️ 连**词级坐标**一起带出来（2026-10-10）：跨列粘连行要按
+          // "每个字属于哪一列"切分，只用整行的 left/right 就得靠"平均字宽"
+          // 估算 —— 一行里汉字和数字混排时必然偏，切点跟着偏。
+          // ML Kit 本来就给了，白丢可惜。详见 [OcrWord] 的注释。
+          final List<OcrWord> words = <OcrWord>[
+            for (final TextElement e in line.elements)
+              OcrWord(
+                text: e.text,
+                left: e.boundingBox.left,
+                top: e.boundingBox.top,
+                right: e.boundingBox.right,
+                bottom: e.boundingBox.bottom,
+              ),
+          ];
           blocks.add(
             OcrBlock(
               text: line.text,
@@ -39,6 +53,7 @@ class OcrService {
               top: box.top,
               right: box.right,
               bottom: box.bottom,
+              words: words,
             ),
           );
         }

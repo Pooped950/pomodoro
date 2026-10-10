@@ -28,6 +28,8 @@ library;
 
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
+
 import 'common_courses.dart';
 import 'ocr_result.dart';
 import '../timetable/course.dart' show dedupeLocationPrefix;
@@ -1343,7 +1345,7 @@ List<(int, String)> _splitSpanningLine(
   final int n = chars.length;
   if (n == 0) return const <(int, String)>[];
 
-  // 每个字符的"显示宽度"以及它左沿之前累积的宽度
+  // 每个字符的"显示宽度"以及它左沿之前累积的宽度（**估算路线**的底稿）
   final List<double> unitBefore = <double>[0];
   final List<double> unitW = <double>[];
   for (int i = 0; i < n; i++) {
@@ -1353,8 +1355,22 @@ List<(int, String)> _splitSpanningLine(
   }
   final double totalUnits = unitBefore[n];
   final double perUnit = totalUnits <= 0 ? b.width / n : b.width / totalUnits;
-  double xOf(int i) => b.left + unitBefore[i] * perUnit; // 字符 i 的左沿
-  double cxOf(int i) => b.left + (unitBefore[i] + unitW[i] / 2) * perUnit;
+
+  // ⚠️ **优先用 ML Kit 的词级真实坐标**（2026-10-10 新增）。
+  //
+  // 以前只能按"平均字宽"估算每个字的位置，而一行里**汉字和数字混排**时
+  // （数字只有汉字一半宽）估算必然偏 —— 切点跟着偏，前一列的尾巴就被
+  // 切给后一列。真机实测的后果是教室名开头多出 `室A(-)`、`1` 这类杂字。
+  // ML Kit 本来就给了每个词的精确框，用它就不用估了。
+  final List<double>? realCenters = charCentersFromWords(b, chars);
+
+  double xOf(int i) => realCenters != null
+      // 字符左沿：前一个字符中心和当前中心的中点（第一个用行左沿）
+      ? (i == 0 ? b.left : (realCenters[i - 1] + realCenters[i]) / 2)
+      : b.left + unitBefore[i] * perUnit;
+  double cxOf(int i) => realCenters != null
+      ? realCenters[i]
+      : b.left + (unitBefore[i] + unitW[i] / 2) * perUnit;
 
   // 每个字符属于哪列（按字符中心）
   final List<int> charCol = <int>[
@@ -2130,4 +2146,40 @@ class _PeriodAnchor {
   const _PeriodAnchor({required this.period, required this.centerY});
   final int period;
   final double centerY;
+}
+
+/// 把 ML Kit 的**词级坐标**展开成**逐字符**的 x 中心。
+///
+/// ## 为什么需要（2026-10-10 真机实测）
+///
+/// `_splitSpanningLine` 要判断"每个字属于哪一列"，以前只有整行的
+/// `left`/`right`，只能按**平均字宽**估算。一行里汉字和数字混排时
+/// （`A02A04406` 这种）估算必然偏，切点跟着偏 —— 前一列的尾巴被切给
+/// 后一列，表现为教室名开头多出 `室A(-)`、`1` 这类杂字。
+///
+/// ML Kit 的 `TextLine.elements` 给了每个词的精确框，这里把词的宽度
+/// 按它含的字符数均分，得到逐字符的中心。
+///
+/// ## 返回 null 的情况（调用方退回估算）
+///
+///   - 这个 block 没有词级坐标（老数据 / 测试夹具）
+///   - 展开出来的字符数和 [chars] 对不上（OCR 的词切分和我们的字符切分
+///     不一致，硬套会错位）
+@visibleForTesting
+List<double>? charCentersFromWords(OcrBlock b, List<String> chars) {
+  if (b.words.isEmpty || chars.isEmpty) return null;
+
+  final List<double> out = <double>[];
+  for (final OcrWord w in b.words) {
+    // 词里的非空白字符数（要和 chars 的口径一致：chars 已剔除空白）
+    final int len = w.text.replaceAll(_spacePattern, '').length;
+    if (len == 0) continue;
+    final double step = w.width / len;
+    for (int k = 0; k < len; k++) {
+      out.add(w.left + step * (k + 0.5));
+    }
+  }
+  // 对不上就别硬套（宁可退回估算，也不能错位）
+  if (out.length != chars.length) return null;
+  return out;
 }

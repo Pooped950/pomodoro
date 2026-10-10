@@ -1,5 +1,46 @@
 import 'package:meta/meta.dart';
 
+/// 一个**词/字级**的坐标（ML Kit 的 `TextElement`）。
+///
+/// ⚠️ 为什么必须留着（2026-10-10 真机实测发现）：
+///
+/// 跨列粘连行要按"每个字属于哪一列"来切分（见 `timetable_grid.dart` 的
+/// `_splitSpanningLine`），而 [OcrBlock] 只有**整行**的 `left`/`right` ——
+/// 以前只能按"平均字宽"估算每个字的位置。**一行里汉字和数字混排时
+/// （数字只有汉字一半宽）估算必然偏**，切点跟着偏，前一列的尾巴就被
+/// 切给了后一列。真机实测的后果：
+///
+/// ```
+/// '室A(-)树达楼桃花坪树达楼307教室'   ← 开头 `室A(-)` 是别的格的尾巴
+/// '1桃花坪一教(达善楼)A02A04…'        ← 开头多一个 `1`
+/// ```
+///
+/// ML Kit **本来就**给了每个词的精确坐标，只是以前被丢掉了。
+/// 留着它就能按真实位置切，不用估算。
+@immutable
+class OcrWord {
+  const OcrWord({
+    required this.text,
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+  });
+
+  final String text;
+  final double left;
+  final double top;
+  final double right;
+  final double bottom;
+
+  double get centerX => (left + right) / 2;
+  double get centerY => (top + bottom) / 2;
+  double get width => right - left;
+
+  @override
+  String toString() => 'OcrWord("$text" @${left.round()}-${right.round()})';
+}
+
 /// 一个被识别出来的文本行，**带坐标**。
 ///
 /// 为什么必须保留坐标：课表识别的难点根本不在"认字"，而在
@@ -13,6 +54,7 @@ class OcrBlock {
     required this.top,
     required this.right,
     required this.bottom,
+    this.words = const <OcrWord>[],
   });
 
   final String text;
@@ -20,6 +62,12 @@ class OcrBlock {
   final double top;
   final double right;
   final double bottom;
+
+  /// 行内每个词的精确坐标（见 [OcrWord]）。
+  ///
+  /// 可能为空：老的调用点（测试夹具、别处构造的 block）不传；
+  /// 跨列拆分遇到空列表会自动退回"平均字宽估算"的老路。
+  final List<OcrWord> words;
 
   double get centerY => (top + bottom) / 2;
   double get centerX => (left + right) / 2;
