@@ -163,3 +163,22 @@ Map<String, int> assignColorIndexes(Iterable<String> names, int paletteSize) {
 
   return assigned;
 }
+
+/// 教室名的**显示形态**：去掉导入时留下的装饰前缀。
+///
+/// 识别出来的教室是 `@腾龙楼408教室` 这种形态 —— 开头的 `@` 是课表 App
+/// 用来分隔课名/教室的记号（识别阶段要靠它切分，见 `timetable_grid.dart`
+/// 的 `_splitCellLines`）。
+///
+/// 但**画在格子里**的时候它纯属占地方：窄格子本来就放不下几个字，
+/// 去掉它常常就是"教室能不能看全"的差别（2026-10-10 用户报
+/// 「识别出来以后课表里教室显示不全」）。
+///
+/// 只剥**行首连续的** `@`，中间的不动（有些教室名真的带 @）。
+String courseLocationForDisplay(String raw) {
+  String s = raw.trim();
+  while (s.startsWith('@')) {
+    s = s.substring(1).trim();
+  }
+  return s;
+}

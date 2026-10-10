@@ -475,12 +475,18 @@ class _CourseBlock extends StatelessWidget {
 
   final Course course;
 
+  /// 教室名去掉显示用的装饰前缀（`@腾龙楼408教室` → `腾龙楼408教室`）。
+  /// 实现见 [courseLocationForDisplay] —— 放在 domain 层是为了能单测。
+  static String _displayLocation(String raw) => courseLocationForDisplay(raw);
+
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final CourseColor colors = courseColorFor(scheme, course.colorIndex);
-    final String location = course.location.trim();
+    final String location = _displayLocation(course.location);
+    // 格子越高，能塞的行越多、字号也敢放大
     final bool roomy = course.periodSpan >= 2;
+    final bool tall = course.periodSpan >= 3;
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -488,35 +494,45 @@ class _CourseBlock extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.chip),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+        // 矮格子（单节）左右也收一点，给文字让出宽度
+        padding: EdgeInsets.symmetric(
+          horizontal: roomy ? 5 : 3,
+          vertical: roomy ? 4 : 2,
+        ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            // Flexible + ellipsis：课名太长时缩掉，而不是撑破格子。
-            // 组件测试会拿 takeException 抓溢出（黄条纹在真机上很难看）
+            // 课名：flex 3 —— 空间紧张时优先压缩它（教室信息更"定位"，
+            // 用户扫一眼课表主要是想知道"在哪上"）
             Flexible(
+              flex: 3,
               child: Text(
                 course.name,
-                maxLines: roomy ? 3 : 2,
+                maxLines: tall ? 3 : (roomy ? 2 : 1),
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  fontSize: 11.5,
+                  fontSize: roomy ? 11.5 : 10,
                   height: 1.25,
                   fontWeight: FontWeight.w600,
                   color: colors.onFill,
                 ),
               ),
             ),
+            // 教室：flex 2，且**多给一行**（用户报"教室显示不全"，
+            // 长教室名在窄格子里本来就需要两行才放得下）
             if (location.isNotEmpty)
-              Text(
-                location,
-                maxLines: roomy ? 2 : 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 9.5,
-                  height: 1.3,
-                  color: colors.onFill.withValues(alpha: 0.72),
+              Flexible(
+                flex: 2,
+                child: Text(
+                  location,
+                  maxLines: roomy ? 2 : 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: roomy ? 9.5 : 8.5,
+                    height: 1.25,
+                    color: colors.onFill.withValues(alpha: 0.78),
+                  ),
                 ),
               ),
           ],

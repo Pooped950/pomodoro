@@ -180,6 +180,19 @@ class TimetableRepository {
   /// 永久加一门课，返回自增 id
   Future<int> insertCourse(Course c) =>
       _db.insert('courses', CourseMapper.toInsertRow(c));
+
+  /// 改一门课（课名 / 教室 / 星期 / 节次都能改）。
+  ///
+  /// 用户在课表页点「编辑这节课」走这里 —— 改内容和**挪位置**（换星期、
+  /// 改起止节次）是同一个动作，都是改这一行的字段。
+  ///
+  /// ⚠️ 不碰 `created_at`：那是"这门课什么时候加的"，不是"什么时候改的"。
+  Future<void> updateCourse(Course c) => _db.update(
+        'courses',
+        CourseMapper.toRow(c)..remove('created_at'),
+        where: 'id = ?',
+        whereArgs: <Object>[c.id],
+      );
 }
 
 /// 依赖注入：main() 里数据库就绪后用 overrideWithValue 注入真实实例。

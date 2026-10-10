@@ -26,11 +26,17 @@ import 'week_grid_view.dart';
 ///    刻意不画空网格占位 —— 一张全是格子的空表反而让人以为"课表是空的"
 /// 2. **已经导入** → 周视图网格（[WeekGridView]）+ 一行概要 + 重新导入入口
 ///
-/// ## 这一步只画不点（2026-10-07）
+/// ## 每格能做什么（2026-10-10 更新）
 ///
-/// 网格是**只读**的：每格右上角的三个点（临时删除 / 永久删除 / 加课）
-/// 和改时间（全局节次表 / 单格）是后续两步。所以现在点格子没有反应 ——
-/// 这是预期的，不是坏的。
+/// 点每格右上角的三个点：
+///
+///   - **编辑这节课** —— 改课名 / 教室，**也能挪位置**（换星期、改起止节次）。
+///     导入之后发现哪格认错了、或者课换了时间，都走这里，不用重新导入
+///   - 本周隐藏（下周自动回来）
+///   - 照这格再加一节
+///   - 永久删除
+///
+/// 空白格是「在这里加一节课」。
 class TimetablePage extends ConsumerWidget {
   const TimetablePage({super.key});
 
@@ -251,6 +257,13 @@ Future<void> _showCellMenu(
           icon: Icons.undo_rounded,
         )
       else ...<AppContextMenuItem<String>>[
+        // 改内容和**挪位置**（换星期、改起止节次）是同一个动作 ——
+        // 都走这个对话框，用户不用去别处找
+        const AppContextMenuItem<String>(
+          value: 'edit',
+          label: '编辑这节课',
+          icon: Icons.edit_outlined,
+        ),
         const AppContextMenuItem<String>(
           value: 'hide',
           label: '本周隐藏（下周自动回来）',
@@ -273,6 +286,9 @@ Future<void> _showCellMenu(
   final TimetableRepository repo = ref.read(timetableRepositoryProvider);
 
   switch (choice) {
+    case 'edit':
+      if (!context.mounted) return;
+      await _editCourseFlow(context, ref, course, monday);
     case 'hide':
       await repo.insertOverride(
         CourseOverride(
@@ -330,6 +346,69 @@ Future<void> _showCellMenu(
         await repo.deleteCourse(course.id);
         ref.invalidate(timetableProvider);
       }
+  }
+}
+
+/// 编辑一门课：改课名 / 教室 / 星期 / 节次。
+///
+/// ## 「调整位置」也走这里（2026-10-10 用户要求）
+///
+/// 用户原话：「单节课没办法调整位置和内容」。其实换星期、改起止节次
+/// 和改课名是**同一张表单的字段** —— 没必要单开一个"拖动/移动"交互
+/// （拖拽在密集网格里又难对准又容易误触），一个对话框全解决。
+Future<void> _editCourseFlow(
+  BuildContext context,
+  WidgetRef ref,
+  Course course,
+  DateTime monday,
+) async {
+  final CourseDraft? draft = await showCourseEditDialog(
+    context,
+    title: '编辑这节课',
+    name: course.name,
+    location: course.location,
+    weekday: course.weekday,
+    startPeriod: course.startPeriod,
+    endPeriod: course.endPeriod,
+  );
+  if (draft == null || !context.mounted) return;
+
+  final TimetableRepository repo = ref.read(timetableRepositoryProvider);
+
+  if (course.id < 0) {
+    // 临时课（本周加的那种）在 courses 表里没有行，改不了 ——
+    // 只能把旧的取消掉、按新字段重新加一条本周的
+    await repo.deleteOverride(-course.id);
+    await repo.insertOverride(
+      CourseOverride(
+        id: 0,
+        kind: CourseOverrideKind.add,
+        weekday: draft.weekday,
+        startPeriod: draft.startPeriod,
+        endPeriod: draft.endPeriod,
+        weekMonday: monday,
+        name: draft.name,
+        location: draft.location,
+        createdAt: DateTime.now(),
+      ),
+    );
+  } else {
+    await repo.updateCourse(
+      course.copyWith(
+        weekday: draft.weekday,
+        startPeriod: draft.startPeriod,
+        endPeriod: draft.endPeriod,
+        name: draft.name,
+        location: draft.location,
+      ),
+    );
+  }
+
+  ref.invalidate(timetableProvider);
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已保存')),
+    );
   }
 }
 
