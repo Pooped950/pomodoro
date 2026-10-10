@@ -1365,8 +1365,16 @@ List<(int, String)> _splitSpanningLine(
   final List<double>? realCenters = charCentersFromWords(b, chars);
 
   double xOf(int i) => realCenters != null
-      // 字符左沿：前一个字符中心和当前中心的中点（第一个用行左沿）
-      ? (i == 0 ? b.left : (realCenters[i - 1] + realCenters[i]) / 2)
+      // ⚠️ `i` 可以等于 `n`（段右边界 = 最后一个字符之后），
+      // 而 `realCenters` 的长度只有 `n` —— 必须单独兜住这个边界，
+      // 否则 `realCenters[n]` 直接 RangeError。
+      // （估算路线的 `unitBefore` 长度是 `n+1`，天然没这个问题，
+      //   所以换成真实坐标时这里才暴露出来。）
+      ? (i <= 0
+          ? b.left
+          : i >= realCenters.length
+              ? b.right
+              : (realCenters[i - 1] + realCenters[i]) / 2)
       : b.left + unitBefore[i] * perUnit;
   double cxOf(int i) => realCenters != null
       ? realCenters[i]
