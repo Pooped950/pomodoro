@@ -1199,7 +1199,7 @@ void _assignAtoms({
                     columns.first.weekday,
                 body),
               ]
-            : _splitSpanningLine(b, columns, vocab))
+            : splitSpanningLine(b, columns, vocab))
         : <(int, String)>[
             (_columnAt(columns, b.centerX)?.weekday ?? columns.first.weekday,
                 body),
@@ -1323,7 +1323,8 @@ class SpanPiece {
 /// `1` 的中心被算成 255.1，只比列边界 254.5 靠右 0.6px，于是 DP 认为
 /// 「教30」全在第一列、「1写」全在第二列，切点提前一个字，
 /// **教室变成 `教30`**（周一的 `教301` 就这么丢了一个字）。
-List<(int, String)> _splitSpanningLine(
+@visibleForTesting
+List<(int, String)> splitSpanningLine(
   OcrBlock b,
   List<WeekdayColumn> columns,
   TimetableVocab vocab,

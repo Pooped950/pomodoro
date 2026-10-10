@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pomodoro/domain/ocr/ocr_result.dart';
 import 'package:pomodoro/domain/ocr/timetable_grid.dart';
+import 'package:pomodoro/domain/ocr/timetable_vocab.dart';
 
 /// **词级坐标**（ML Kit 的 `TextElement`）展开成逐字符中心。
 ///
@@ -47,6 +48,8 @@ List<String> charsOf(String s) =>
     s.split('').where((String c) => c.trim().isNotEmpty).toList();
 
 void main() {
+  mainSpanningBounds();
+
   group('★ 有词级坐标：按真实位置展开', () {
     test('单个词：在它自己的框里均分', () {
       final OcrBlock b = bw(100, 0, 260, 30, '枫林楼301教室',
@@ -144,5 +147,100 @@ void main() {
       expect(c, isNotNull, reason: '词里的空白应该被跳过，长度要对得上');
       expect(c!.length, 8);
     });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// ⚠️ 2026-10-10 真机事故：`xOf(n)` 越界
+// ---------------------------------------------------------------------------
+
+/// **跨列拆分的边界回归**。
+///
+/// ## 事故经过
+///
+/// 我把"平均字宽估算"换成"词级真实坐标"之后，用户导入直接报
+/// **「没有识别到任何课程」**。探针抓到：
+///
+/// ```
+/// 解析失败: RangeError (length): Invalid value: Not in inclusive range 0..5: 6
+/// ```
+///
+/// 根因：`xOf(i)` 的语义是"第 i 个字符的左沿"，而调用点里有 `xOf(j)`，
+/// `j` 是**段的右边界**、初始化就是 `n`（最后一个字符之后）。
+/// 估算路线的 `unitBefore` 长度是 `n+1`，`unitBefore[n]` 合法；
+/// 我新加的 `realCenters` 长度只有 `n` → `realCenters[n]` 直接越界。
+///
+/// ## 为什么上一版测试没抓到
+///
+/// 那 7 条全是**直接单测 `charCentersFromWords`**，
+/// 而 `xOf` 是它的**调用方** —— 边界漏在了两者之间。
+///
+/// **教训：换实现路径时要连调用方的边界一起过一遍。**
+void mainSpanningBounds() {
+  const List<WeekdayColumn> columns = <WeekdayColumn>[
+    WeekdayColumn(weekday: 1, centerX: 120, left: 30, right: 210),
+    WeekdayColumn(weekday: 2, centerX: 300, left: 210, right: 390),
+    WeekdayColumn(weekday: 3, centerX: 480, left: 390, right: 570),
+  ];
+
+  OcrBlock spanning(String text, List<(String, double, double)> words) =>
+      OcrBlock(
+        text: text,
+        left: words.first.$2,
+        top: 380,
+        right: words.last.$3,
+        bottom: 410,
+        words: <OcrWord>[
+          for (final (String w, double l, double r) in words)
+            OcrWord(text: w, left: l, top: 380, right: r, bottom: 410),
+        ],
+      );
+
+  test('★ 带词级坐标的跨列行：不能越界（事故回归）', () {
+    final List<(int, String)> pieces = splitSpanningLine(
+      spanning(
+        '枫林楼301教室 紫荆楼202教室',
+        <(String, double, double)>[
+          ('枫林楼301教室', 40, 200),
+          ('紫荆楼202教室', 220, 380),
+        ],
+      ),
+      columns,
+      const TimetableVocab(),
+    );
+    expect(pieces, isNotEmpty, reason: '不能因为越界抛异常');
+  });
+
+  test('★ 单个词、恰好铺满一列：右边界 = n 也要安全', () {
+    final List<(int, String)> pieces = splitSpanningLine(
+      spanning('枫林楼301教室', <(String, double, double)>[('枫林楼301教室', 40, 200)]),
+      columns,
+      const TimetableVocab(),
+    );
+    expect(pieces, isNotEmpty);
+  });
+
+  test('★ 短行（1~2 字）：边界最容易踩', () {
+    for (final String s in <String>['A', 'A1', 'A1B2']) {
+      final List<(int, String)> pieces = splitSpanningLine(
+        spanning(s, <(String, double, double)>[(s, 40, 200)]),
+        columns,
+        const TimetableVocab(),
+      );
+      // 不抛异常即可（内容归属由别的测试管）
+      expect(pieces.length, greaterThanOrEqualTo(0));
+    }
+  });
+
+  test('★ 词级坐标和字符数对不上时也不能崩', () {
+    final List<(int, String)> pieces = splitSpanningLine(
+      spanning(
+        '枫林楼301教室紫荆楼202教室',
+        <(String, double, double)>[('完全不对的词', 40, 200)],
+      ),
+      columns,
+      const TimetableVocab(),
+    );
+    expect(pieces.length, greaterThanOrEqualTo(0), reason: '要退回估算，不能崩');
   });
 }
