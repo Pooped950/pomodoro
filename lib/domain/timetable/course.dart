@@ -184,7 +184,7 @@ String courseLocationForDisplay(String raw) {
   while (s.startsWith('@')) {
     s = s.substring(1).trim();
   }
-  return dedupeLocationPrefix(s);
+  return compactLocation(dedupeLocationPrefix(s));
 }
 
 /// 去掉教室名里**识别阶段拼重复**的冗余前缀。
@@ -263,4 +263,41 @@ int _commonPrefixLen(String a, String b) {
     i++;
   }
   return i;
+}
+
+/// 教室名的**紧凑形态** —— 格子里放不下完整名时用。
+///
+/// ## 为什么需要（2026-10-10 真机实测）
+///
+/// 这款 App 的教室名能长到 12~14 个字（`桃花坪四教(实训楼)202教室`），
+/// 而一格宽度只有 5~6 个汉字的位置 —— 完整名必然被 `ellipsis` 截掉，
+/// 用户看到的是 `桃花坪四教(实训...`，等于**最关键的房间号反而没了**。
+///
+/// 但真正定位用的信息只有**楼栋 + 房间号**：
+///
+///   - 括号里的是楼栋**别名**（`(实训楼)`、`(达善楼)`、`(工训楼)`）—— 冗余，去掉
+///   - 结尾的「教室」两个字 —— 格子位置本身就说明这是教室，去掉
+///
+/// ```
+/// 桃花坪四教(实训楼)202教室  →  桃花坪四教202
+/// 桃花坪一教(达善楼)A02A04   →  桃花坪一教A02A04
+/// 树达楼307教室              →  树达楼307
+/// 至善楼206教室              →  至善楼206
+/// ```
+///
+/// ⚠️ **只在显示层用**。编辑对话框、数据库里存的都还是完整名 ——
+/// 用户点「编辑这节课」看到的应该是原样，不能因为我们显示时缩了就丢信息。
+String compactLocation(String raw) {
+  final String s = raw.trim();
+  if (s.length <= 4) return s; // `101` / `A2-1` 这种本来就短
+
+  // 括号里的是楼栋别名 → 去掉
+  String out = s.replaceAll(RegExp(r'[（(][^）)]*[）)]'), '');
+  // 结尾的「教室」冗余（格子位置本身就说明了）→ 去掉
+  if (out.endsWith('教室')) {
+    out = out.substring(0, out.length - 2);
+  }
+  out = out.trim();
+  // 缩没了就退回原样（宁可不缩，也不能显示空）
+  return out.isEmpty ? s : out;
 }

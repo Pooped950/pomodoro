@@ -10,18 +10,20 @@ void main() {
     test('★ 剥掉导入留下的 `@` 前缀（用户报的"显示不全"主因）', () {
       // `@` 是识别阶段的分隔记号，画在格子里纯属占地方 ——
       // 窄格子本来就放不下几个字，少一个字符常常就是"能不能看全"的差别
-      expect(courseLocationForDisplay('@腾龙楼408教室'), '腾龙楼408教室');
-      expect(courseLocationForDisplay('@至善楼206教室'), '至善楼206教室');
-      expect(courseLocationForDisplay('@文渊楼211教室'), '文渊楼211教室');
+      // ⚠️ 2026-10-10 起显示层还会**紧凑化**：结尾的「教室」两个字去掉
+      // （格子位置本身就说明了），免得 12 字的长教室名被 ellipsis 截掉房间号
+      expect(courseLocationForDisplay('@腾龙楼408教室'), '腾龙楼408');
+      expect(courseLocationForDisplay('@至善楼206教室'), '至善楼206');
+      expect(courseLocationForDisplay('@文渊楼211教室'), '文渊楼211');
     });
 
     test('★ 连续的多个 `@` 也要剥干净', () {
-      expect(courseLocationForDisplay('@@腾龙楼408教室'), '腾龙楼408教室');
+      expect(courseLocationForDisplay('@@腾龙楼408教室'), '腾龙楼408');
       expect(courseLocationForDisplay('  @  腾龙楼408  '), '腾龙楼408');
     });
 
     test('★ 没有前缀的原样返回', () {
-      expect(courseLocationForDisplay('腾龙楼408教室'), '腾龙楼408教室');
+      expect(courseLocationForDisplay('腾龙楼408教室'), '腾龙楼408');
       expect(courseLocationForDisplay(''), '');
       expect(courseLocationForDisplay('   '), '');
     });

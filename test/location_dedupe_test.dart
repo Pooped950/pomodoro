@@ -81,13 +81,13 @@ void main() {
   group('显示形态（剥 @ + 去重）', () {
     test('★ 老数据：既带 @ 又拼重复，显示时要一并清掉', () {
       expect(courseLocationForDisplay('@桃花坪三教桃花坪三教210教室'),
-          '桃花坪三教210教室');
+          '桃花坪三教210');
       expect(courseLocationForDisplay('@树达楼桃花坪树达楼307教室'),
-          '树达楼307教室');
+          '树达楼307');
     });
 
-    test('★ 新数据：只有 @ 要剥', () {
-      expect(courseLocationForDisplay('@至善楼206教室'), '至善楼206教室');
+    test('★ 新数据：剥 @ + 紧凑化', () {
+      expect(courseLocationForDisplay('@至善楼206教室'), '至善楼206');
     });
 
     test('★ 中间的 @ 不动', () {
