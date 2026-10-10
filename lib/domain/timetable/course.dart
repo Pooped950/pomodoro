@@ -293,11 +293,42 @@ String compactLocation(String raw) {
 
   // 括号里的是楼栋别名 → 去掉
   String out = s.replaceAll(RegExp(r'[（(][^）)]*[）)]'), '');
-  // 结尾的「教室」冗余（格子位置本身就说明了）→ 去掉
-  if (out.endsWith('教室')) {
-    out = out.substring(0, out.length - 2);
+
+  // 结尾的「教室」冗余（格子位置本身就说明了）→ 去掉。
+  // ⚠️ `数室` / `敦室` 都是 `教室` 被 OCR 认错的形态，一起认
+  // （真机实测：`桃花坪四教(实训楼)202数室`）
+  for (final String suffix in <String>['教室', '数室', '敦室']) {
+    if (out.endsWith(suffix)) {
+      out = out.substring(0, out.length - 2);
+      break;
+    }
   }
+
+  // 重复出现的校区名：`桃花坪四教桃花坪篮球场` → `桃花坪四教篮球场`
+  out = _dedupeSchoolPrefix(out.trim());
+
   out = out.trim();
   // 缩没了就退回原样（宁可不缩，也不能显示空）
   return out.isEmpty ? s : out;
+}
+
+/// 去掉**重复出现的校区名**。
+///
+/// 跨校区上课时教室名会写成「校区 + 楼栋 + 校区 + 场地」
+/// （`桃花坪四教桃花坪篮球场`），第二个校区名是冗余的。
+///
+/// 判据：拿开头 2~4 字当候选词，看它在**后面**是否又出现 ——
+/// 出现就删掉后面那处。要求整体长度 ≥8，免得把
+/// `A栋A101` 这种误伤。
+String _dedupeSchoolPrefix(String s) {
+  if (s.length < 8) return s;
+  for (final int n in <int>[4, 3, 2]) {
+    if (s.length < n * 2) continue;
+    final String head = s.substring(0, n);
+    final int idx = s.indexOf(head, n);
+    if (idx > 0) {
+      return s.substring(0, idx) + s.substring(idx + head.length);
+    }
+  }
+  return s;
 }
