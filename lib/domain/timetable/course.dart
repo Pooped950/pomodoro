@@ -175,10 +175,92 @@ Map<String, int> assignColorIndexes(Iterable<String> names, int paletteSize) {
 /// 「识别出来以后课表里教室显示不全」）。
 ///
 /// 只剥**行首连续的** `@`，中间的不动（有些教室名真的带 @）。
+///
+/// ⚠️ 顺手也做一遍 [dedupeLocationPrefix]：老版本导入的数据里已经存了
+/// 拼重复的教室名（`桃花坪三教桃花坪三教210教室`），显示时清一遍，
+/// 用户不用重新导入就能看到干净的结果。
 String courseLocationForDisplay(String raw) {
   String s = raw.trim();
   while (s.startsWith('@')) {
     s = s.substring(1).trim();
   }
+  return dedupeLocationPrefix(s);
+}
+
+/// 去掉教室名里**识别阶段拼重复**的冗余前缀。
+///
+/// ## 为什么会有重复（2026-10-10 真机实测）
+///
+/// 这款课表 App 的教室名很长（`桃花坪四教(实训楼)304教室`），OCR 会把
+/// 同一横排相邻两列的文字粘成一条**跨列行**，拆分时如果切点偏了，
+/// 前半段的楼栋名就会和后半段的完整教室名**叠在一起**：
+///
+/// | 脏数据 | 应该是什么 |
+/// |---|---|
+/// | `桃花坪三教桃花坪三教210教室` | `桃花坪三教210教室` |
+/// | `树达楼桃花坪树达楼307教室` | `树达楼307教室` |
+/// | `桃花坪四教(实训楼)花坪四教(实训楼)304教室` | `桃花坪四教(实训楼)304教室` |
+/// | `桃花坪一教(达善楼)桃花坪一教(达善楼)A02A04` | `桃花坪一教(达善楼)A02A04` |
+///
+/// 实测 11 门课里 **10 门**都这样 —— 不是偶发，是系统性拼接。
+///
+/// ## 判据（三种重复形态，都要求"后半段本身是完整的"）
+///
+///   1. **整段重复**：后半段以整个前半段开头
+///   2. **尾部重叠**：前半段的**结尾**等于后半段的**开头**（少一两个字的重复）
+///   3. **同头**：前半段和后半段**开头相同**（前半是"楼栋+校区"，后半才是房间）
+///
+/// ⚠️ 只认这三种**明确的**重复。真实教室名（`桃花坪四教(实训楼)304`）
+/// 三种都匹配不上，原样返回 —— 宁可不改，也不能把好数据改坏。
+String dedupeLocationPrefix(String raw) {
+  final String s = raw.trim();
+  if (s.length < 6) return s;
+
+  for (int cut = 2; cut <= s.length - 2; cut++) {
+    final String head = s.substring(0, cut);
+    final String rest = s.substring(cut);
+    if (rest.isEmpty) break;
+
+    // ① 整段重复：`桃花坪三教` + `桃花坪三教210教室`
+    if (rest.startsWith(head)) {
+      final String fixed = dedupeLocationPrefix(rest);
+      return fixed;
+    }
+
+    // ② 尾部重叠：`桃花坪四教(实训楼)` + `花坪四教(实训楼)304教室`
+    //    head 的结尾 == rest 的开头（至少 2 字，免得单字巧合）
+    final int maxK = head.length < rest.length ? head.length : rest.length;
+    for (int k = maxK; k >= 2; k--) {
+      if (head.endsWith(rest.substring(0, k))) {
+        return s.substring(0, cut - k) + rest;
+      }
+    }
+
+    // ③ 同头：`树达楼桃花坪` + `树达楼307教室`
+    //    要求 head 几乎整个都是 rest 的前缀（差不超过 2 字），
+    //    说明 head 只是"楼栋+校区"的冗余描述
+    final int cp = _commonPrefixLen(head, rest);
+    if (cp >= 2 && head.length - cp <= 2) {
+      return rest;
+    }
+
+    // ④ 同头 + 后半段带房间号：`树达楼桃花坪` + `树达楼307教室`
+    //    这类前半段是"楼栋 + 校区"，后半段才是"楼栋 + 房间"。
+    //    要求后半段**含数字**（房间号），免得把两个并列地点误合并
+    //    （`桃花坪四教(实训楼)桃花坪篮球场` 是真实的两段，不能动）。
+    if (cp >= 2 && RegExp(r'\d').hasMatch(rest)) {
+      return rest;
+    }
+  }
   return s;
+}
+
+/// 两个串的公共前缀长度
+int _commonPrefixLen(String a, String b) {
+  int i = 0;
+  final int n = a.length < b.length ? a.length : b.length;
+  while (i < n && a[i] == b[i]) {
+    i++;
+  }
+  return i;
 }

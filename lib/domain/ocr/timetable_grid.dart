@@ -30,6 +30,7 @@ import 'dart:typed_data';
 
 import 'common_courses.dart';
 import 'ocr_result.dart';
+import '../timetable/course.dart' show dedupeLocationPrefix;
 import 'ocr_rules.dart';
 import 'timetable_geometry.dart';
 import 'timetable_vocab.dart';
@@ -910,7 +911,11 @@ ParsedTimetable _parseWithGeometry({
       startPeriod: cell.startPeriod,
       endPeriod: cell.endPeriod,
       name: n.isEmpty ? null : n,
-      location: loc.isEmpty ? null : loc,
+      // ⚠️ 落库前清一遍拼重复（2026-10-10 真机实测 11 门课里 10 门中招）：
+      // 跨列行拆分切点偏了会把"楼栋名 + 完整教室名"叠在一起
+      // （`桃花坪三教桃花坪三教210教室`）。显示层也会清一遍兜底老数据，
+      // 但新导入的直接存干净的更好。
+      location: loc.isEmpty ? null : dedupeLocationPrefix(loc),
     ));
   }
 
